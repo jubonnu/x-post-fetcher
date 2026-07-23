@@ -6,7 +6,7 @@ Playwright で Xアカウント [@Zabi_pokeka](https://x.com/Zabi_pokeka) の最
 ## できること
 
 - 対象アカウントのプロフィールへアクセス
-- 最新5件の投稿を取得（投稿ID / 投稿日時 / 本文 / URL）
+- 最新 N 件の投稿を取得（投稿ID / 投稿日時 / 本文 / URL）— 件数は `MAX_POSTS` で調整
 - Console へ整形表示
 - 各投稿の HTML を `./output/post-<id>.html` に保存
 - 投稿一覧を `./output/posts.json` に保存
@@ -23,6 +23,24 @@ npx playwright install chromium
 ```bash
 npm run fetch
 ```
+
+## ログイン取得（連続した最新 N 件が欲しい場合）
+
+未ログインだと X は「間引かれた十数件」しか返さない（連続した最新投稿にならない）。
+連続した最新 N 件を取るにはログインが必要。
+
+```bash
+npm run login   # ブラウザが開くので自分で X にログイン → セッションが auth.json に保存される
+npm run fetch   # 以降 auth.json があればログイン状態で実行され、スクロールで連続取得する
+```
+
+- `npm run login` は画面付きブラウザを起動する。**パスワードはブラウザに直接入力**するだけで、
+  スクリプトやログには残らない。ログイン完了（`auth_token` クッキー検出）を自動検知して
+  `./auth.json` に保存する。
+- **注意**: ログイン状態での自動取得は X の利用規約に抵触し、アカウント凍結・レート制限のリスクがある。
+  必ず**メインではなく専用（捨て）アカウント**を使うこと。`auth.json` は絶対にコミット・共有しない
+  （`.gitignore` 済み）。
+- 取得件数は `src/index.ts` の `MAX_POSTS` で変更する。
 
 ## 技術メモ（検証で分かったこと）
 

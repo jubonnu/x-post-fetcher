@@ -4,6 +4,7 @@
   "description": "PoC: Fetch latest posts from an X account using Playwright",
   "type": "module",
   "scripts": {
+    "login": "node src/login.ts",
     "fetch": "node src/index.ts",
     "build": "tsc"
   },
