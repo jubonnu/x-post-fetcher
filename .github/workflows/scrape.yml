@@ -1,0 +1,65 @@
+name: scrape-x
+
+# 5分間隔の cron + 手動実行。前回が実行中なら多重起動しない。
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: scrape-x
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      # auth.json を Base64 Secret から一時復元（リポジトリには含めない）
+      - name: Restore auth.json from secret
+        env:
+          AUTH_JSON_BASE64: ${{ secrets.AUTH_JSON_BASE64 }}
+        run: |
+          if [ -z "$AUTH_JSON_BASE64" ]; then
+            echo "AUTH_JSON_BASE64 secret is not set" >&2
+            exit 1
+          fi
+          echo "$AUTH_JSON_BASE64" | base64 -d > auth.json
+
+      - name: Run scraper → ingest
+        env:
+          INGEST_URL: ${{ secrets.INGEST_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          TARGET_USER: Zabi_pokeka
+          MAX_POSTS: "14"
+        run: npm run scrape
+
+      # auth.json を必ず削除（Artifact/後続に残さない）
+      - name: Cleanup auth.json
+        if: always()
+        run: rm -f auth.json
+
+      # 失敗時のデバッグ用 Artifact（認証ファイルは除外）
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scrape-debug
+          path: |
+            output/
+            !**/auth.json
+          retention-days: 3
+          if-no-files-found: ignore

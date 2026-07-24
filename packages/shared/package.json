@@ -1,0 +1,24 @@
+{
+  "name": "@x-post/shared",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./schemas": "./src/schemas.ts",
+    "./types": "./src/types.ts",
+    "./utils/hash": "./src/utils/hash.ts",
+    "./utils/url": "./src/utils/url.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "vitest": "^2.1.0"
+  }
+}

@@ -3,3 +3,14 @@ dist/
 auth.json
 output/*.html
 output/posts.json
+
+# libSQL ローカルDB / テスト一時ファイル
+*.db
+*.db-wal
+*.db-shm
+.tmp-test-*
+local.db
+
+# env
+.env
+.env.local

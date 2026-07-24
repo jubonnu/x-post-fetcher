@@ -1,0 +1,19 @@
+<article data-testid="tweet" role="article">
+  <div data-testid="User-Name">
+    <a href="/zabi_poc"><span>ザビマル</span></a>
+    <a href="/zabi_poc"><span>@zabi_poc</span></a>
+    <a href="/zabi_poc/status/2078374230874529891">
+      <time datetime="2026-07-23T20:00:00.000Z">7月23日</time>
+    </a>
+  </div>
+  <div data-testid="tweetText" lang="ja" dir="auto"><span>同一画像が複数箇所</span></div>
+  <div data-testid="tweetPhoto">
+    <!-- 同じ画像ID XyZ99AbCdEf を size/format 違いで複数箇所に -->
+    <img
+      src="https://pbs.twimg.com/media/XyZ99AbCdEf?format=jpg&name=small"
+      srcset="https://pbs.twimg.com/media/XyZ99AbCdEf?format=jpg&name=medium 600w, https://pbs.twimg.com/media/XyZ99AbCdEf?format=jpg&name=large 1200w" />
+    <picture>
+      <source srcset="https://pbs.twimg.com/media/XyZ99AbCdEf?format=jpg&name=orig" />
+    </picture>
+  </div>
+</article>

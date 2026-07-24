@@ -1,0 +1,85 @@
+import { computeContentHash, type IngestPayload, type SourcePostInput } from "@x-post/shared";
+import { fetchTweets } from "../scraping/x/fetchTweets.ts";
+import type { RawPost } from "../scraping/x/parseTweetDom.ts";
+
+/**
+ * バッチ: X を取得 → sourcePost payload を組み立て → Worker の /ingest へ POST。
+ * Phase 1 は解析（analysis）を送らず、生投稿のみを登録する。
+ *
+ * 環境変数:
+ *   INGEST_URL   … 例 http://localhost:8787/ingest（デフォルト）
+ *   INGEST_TOKEN … Bearer トークン（未設定なら送信せずドライラン）
+ *   TARGET_USER  … 取得対象（デフォルト Zabi_pokeka）
+ *   MAX_POSTS    … 取得件数（デフォルト 14）
+ */
+
+async function buildSourcePost(p: RawPost): Promise<SourcePostInput> {
+  return {
+    platform: "x",
+    externalPostId: p.tweetId,
+    authorId: p.authorId,
+    authorUsername: p.authorUsername,
+    authorDisplayName: p.authorDisplayName,
+    bodyRaw: p.bodyText,
+    publishedAt: p.publishedAt,
+    sourceUrl: p.sourceUrl,
+    imageUrls: p.imageUrls,
+    externalUrls: p.externalUrls,
+    rawHtml: p.rawHtml,
+    cleanedHtml: p.cleanedHtml,
+    contentHash: await computeContentHash(p.bodyText),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+async function main(): Promise<void> {
+  const batchId = `batch_${Date.now()}`;
+  const ingestUrl = process.env.INGEST_URL ?? "http://localhost:8787/ingest";
+  const token = process.env.INGEST_TOKEN;
+  const targetUser = process.env.TARGET_USER ?? "Zabi_pokeka";
+  const maxPosts = Number(process.env.MAX_POSTS ?? 14);
+
+  const posts = await fetchTweets({ targetUser, maxPosts });
+  console.log(`[scrape] batchId=${batchId} 取得 ${posts.length} 件`);
+
+  if (!token) {
+    console.warn("[scrape] INGEST_TOKEN 未設定のためドライラン（送信しません）。");
+    for (const p of posts) {
+      const sp = await buildSourcePost(p);
+      console.log(`[dryrun] ${sp.externalPostId} ${sp.publishedAt} hash=${sp.contentHash.slice(0, 8)}`);
+    }
+    return;
+  }
+
+  const counts: Record<string, number> = { inserted: 0, updated: 0, unchanged: 0, failed: 0 };
+  for (const p of posts) {
+    const payload: IngestPayload = { batchId, sourcePost: await buildSourcePost(p) };
+    try {
+      const res = await fetch(ingestUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      const json: any = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) {
+        counts.failed++;
+        console.error(`[scrape] tweetId=${p.tweetId} 失敗 status=${res.status} ${JSON.stringify(json)}`);
+      } else {
+        counts[json.action] = (counts[json.action] ?? 0) + 1;
+        console.log(`[scrape] tweetId=${p.tweetId} → ${json.action} (sourcePostId=${json.sourcePostId})`);
+      }
+    } catch (e) {
+      counts.failed++;
+      console.error(`[scrape] tweetId=${p.tweetId} 送信エラー: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+
+  console.log(
+    `[scrape] 完了 inserted=${counts.inserted} updated=${counts.updated} unchanged=${counts.unchanged} failed=${counts.failed}`
+  );
+}
+
+main().catch((err) => {
+  console.error("[scrape][error]", err instanceof Error ? err.message : err);
+  process.exit(1);
+});

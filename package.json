@@ -1,19 +1,24 @@
 {
   "name": "x-post-fetcher",
-  "version": "0.1.0",
-  "description": "PoC: Fetch latest posts from an X account using Playwright",
+  "version": "0.2.0",
+  "private": true,
+  "description": "X投稿取得 → 抽選情報 解析・DB登録システム（Phase 1: 保存層 + 生データ抽出）",
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "login": "node src/login.ts",
-    "fetch": "node src/index.ts",
-    "build": "tsc"
-  },
-  "dependencies": {
-    "playwright": "^1.48.0"
+    "login": "npm run login -w @x-post/scraper",
+    "fetch": "npm run fetch -w @x-post/scraper",
+    "scrape": "npm run scrape -w @x-post/scraper",
+    "worker:dev": "npm run dev -w @x-post/worker",
+    "db:generate": "npm run db:generate -w @x-post/worker",
+    "db:migrate": "npm run db:migrate -w @x-post/worker",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "devDependencies": {
-    "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.6.0"
   }
 }

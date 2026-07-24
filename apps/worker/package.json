@@ -1,0 +1,26 @@
+{
+  "name": "@x-post/worker",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/node-server.ts",
+    "deploy": "wrangler deploy",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "node src/migrate.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@libsql/client": "^0.14.0",
+    "@x-post/shared": "*",
+    "drizzle-orm": "^0.36.0",
+    "hono": "^4.6.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241011.0",
+    "@hono/node-server": "^1.13.0",
+    "drizzle-kit": "^0.28.0",
+    "vitest": "^2.1.0"
+  }
+}
