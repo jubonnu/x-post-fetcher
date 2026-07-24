@@ -2,7 +2,7 @@
 
 `docs/test.md` の要件に対する実装方針。現状は `src/index.ts`（取得）+ `src/login.ts`（ログイン）のみの PoC で、DB/ORM/Workers は未導入（greenfield）。
 
-> **⑬ 全体方針（不変）**: 構成 `GitHub Actions → Playwright → Claude → Worker → Turso` は変更しない。段階実装（Phase1〜5）も維持する。本改訂は **設計の精度向上・保守性向上・再解析性向上・安全性向上のみ** を目的とし、既存構成は崩さない。
+> **⑬ 全体方針（不変）**: 構成 `GitHub Actions → Playwright → Worker → Turso` と段階実装（Phase1〜5）を維持する。**解析は 100% ルールベース**で行い、LLM（Claude / Anthropic SDK）・API キー・モデル管理は使用しない。本改訂は **設計の精度向上・保守性向上・再解析性向上・安全性向上** を目的とし、既存構成は崩さない。
 
 ---
 
@@ -15,26 +15,27 @@
 | 1 | **スクレイパの実行場所を Workers 外に置く（採用判断）** | 「API=Cloudflare Workers」 | **Cloudflare Browser Rendering という選択肢は存在する**。ただし今回のXログイン済みスクレイパでは **セッション維持・安定性・Bot検知・コスト・運用性** を考慮し、`GitHub Actions(Node) → Cloudflare Workers(API) → Turso` へ責務分離する。**「技術的に不可能」ではなく「今回はこの構成を採用する」** という判断。 |
 | 2 | **既存DB/ORMが存在しない** | 「既存方式に合わせて」 | 新規選定が必要。**Drizzle ORM + Turso(libSQL)** を採用。 |
 | 3 | **画像除外と `imageUrls` 保存の矛盾** | 生データに画像URL必須 | 直前に画像除外実装済み。→ **画像バイナリはDLしない（ブロック維持）が、URLはDOMから抽出して保存**。`rawHtml` は画像URLタグ込みで保存（DB内の生データ源のため）。 |
-| 4 | **抽出の中核がフリーテキスト解析** | 純ルール前提に読める | 純ルールだと精度破綻。→ **ハイブリッド**（下記）。 |
+| 4 | **抽出の中核がフリーテキスト解析** | 純ルール前提に読める | **100% ルールベース**で実装（LLM 不使用）。分割・意味的対応付けが必要な複雑投稿は `needs_review` に落として Phase 3 で扱う。 |
 | 5 | **スコープ過大** | 全機能＋20テストを一括 | **5フェーズに分割**して段階実装。 |
 | 6 | **URL解決のコスト/検知リスク** | 全URLをブラウザ解決 | 基本は**HTTPリダイレクト追跡**で解決。ブラウザ遷移は最小化。 |
 
 ---
 
-## 1. 抽出方針（ハイブリッド）
+## 1. 抽出方針（100% ルールベース）
 
-- **ルールベースで実装**: DOM取得（tweetId/投稿者/日時/本文/URL）、明示的な日時表現の正規化、URL分類、曜日整合性チェック、スキーマ検証。
-- **Claude API（構造化抽出）で実装**: 投稿分類、複数店舗・複数商品の分割、別セクション（応募期間↔当選発表）の商品名対応付け、店舗名・支店名・地域の意味的抽出。
-- **ゲーティング（全投稿をLLMに送らない）**:
+> 本アプリでは **LLM（Claude / Anthropic SDK）を使用しない**。抽選情報の解析はすべてルールで行う。
+
+- **ルールベースで実装**: DOM取得（tweetId/投稿者/日時/本文/URL）、投稿分類、単一抽選抽出（商品名・カード種類・店舗・支店・地域・応募開始/締切・当選発表）、明示的な日時表現の正規化、URL分類、曜日整合性チェック、スキーマ検証。
+- **ゲーティング（ルールのみ）**:
   - 明確な対象外投稿はルールで除外
-  - 単純な1店舗・1商品はルール抽出を試す
-  - 複数商品・複数店舗・複数セクション・曖昧な投稿のみLLMへ
-  - LLM出力は **Zod** で検証
-  - **日時はLLMを鵜呑みにせず**、投稿日時・曜日・締切前後関係をルールで再検証
+  - 単純な1店舗・1商品はルール抽出で確定（商品/店舗が欠ければ `needs_review`）
+  - 複数商品・複数店舗・複数セクションはルールでは安全に分割できないため `needs_review`（分割は Phase 3）
+  - 出力は **Zod** で検証
+  - 日時は投稿日時・曜日・締切前後関係をルールで確定
 
-### Claude と Worker の責務分離（重要）
+### 解析（scraper）と Worker の責務分離（重要）
 
-**Claude は以下を行わない**（＝意味的な抽出・分割・対応付けの提案までに限定）:
+**scraper の解析は以下を行わない**（＝ルールによる抽出・分類の提案までに限定）:
 - DB への直接登録・更新
 - 既存抽選 ID の最終決定
 - 同一抽選かどうかの最終決定
@@ -64,13 +65,13 @@ GitHub Actions (cron 5min, Node)                Cloudflare Workers            Tu
 │ Playwright fetch (既存流用)      │  (Bearerトークン) │ 検証(Zod)          │ ─────────▶ │ tables  │
 │ → DOM生データ抽出(ルール)        │ ───────────────▶ │ upsert/重複判定     │            │         │
 │ → 分類/抽出 ゲーティング          │                  │ 同一抽選マッチング   │ ◀───────── │ (read)  │
-│   simple:ルール / complex:Claude │                  │ 統合+履歴           │            └─────────┘
+│   （100% ルール）                │                  │ 統合+履歴           │            └─────────┘
 │ → Zodで自己検証 → payload        │                  │ 構造化ログ           │
 └───────────────────────────────┘                  │ 公開API(GET)        │
                                                     └────────────────────┘
 ```
 
-- **LLM構造化はスクレイパ側(GA Node)** で実行し、構造化済み payload を Worker へ POST。
+- **ルール構造化はスクレイパ側(GA Node)** で実行し、構造化済み payload を Worker へ POST。
 - **同一判定・統合・履歴は Worker 側**（Turso の既存抽選を読む必要があるため）。
 - GitHub Actions: **cron 最短5分・workflow_dispatch（手動）・concurrency で多重起動防止**。
 - `auth.json` は **Base64化して GitHub Secrets に保存 → 実行時に一時ファイル復元**（コミット禁止）。
@@ -106,8 +107,9 @@ Worker 側 `/ingest` の処理順:
 | ORM | **Drizzle** | libSQL/Turso アダプタ・Workers対応・マイグレーション |
 | Worker ルータ | **Hono** | 軽量・Workers標準的 |
 | 検証 | **Zod** | shared に置き scraper/worker で共用 |
-| LLM SDK | **@anthropic-ai/sdk** | モデルは精度重視で Sonnet 4.6／コスト優先で Haiku 4.5。実装時に `claude-api` スキルでモデルID・料金を確認 |
 | モノレポ | **npm workspaces** | 2ランタイム＋共有パッケージを分離 |
+
+> LLM SDK（`@anthropic-ai/sdk`）は**採用しない**（解析は 100% ルールベース）。
 
 ---
 
@@ -116,12 +118,11 @@ Worker 側 `/ingest` の処理順:
 ```
 packages/shared/          # Node/Workers 両方で使う純粋ロジック
   src/types.ts            # 共通型（PostType, CardType, Precision, Status 等）
-  src/schemas.ts          # Zod: 取込payload / LLM出力スキーマ
+  src/schemas.ts          # Zod: 取込payload / 解析結果スキーマ
   src/utils/{date,url,hash}.ts   # 日時正規化・年推定・曜日整合 / URL分類 / contentHash
 apps/scraper/             # GitHub Actions(Node)
   src/scraping/x/{fetchTweets,parseTweetDom,selectors}.ts  # 既存 index.ts を分解
-  src/lottery/{classifyPost,extractLotteryData,resolveDates,calculateConfidence}.ts  # 抽出・分類・提案まで
-  src/llm/claudeClient.ts # Claude構造化（ゲーティング後のみ呼ぶ）
+  src/lottery/{classifyPost,extractLotteryData,classifyUrls,keywords}.ts  # ルールによる抽出・分類
   src/jobs/fetchAndProcessTweets.ts  # オーケストレーション→Worker取込APIへPOST
   src/login.ts            # 既存流用
 apps/worker/              # Cloudflare Workers + Turso
@@ -133,7 +134,7 @@ apps/worker/              # Cloudflare Workers + Turso
 .github/workflows/scrape.yml
 ```
 
-> test.md のモジュール分割意図を尊重しつつ、**確定・正規化・DB系（`normalize*`/`resolveDates`(再検証)/`matchExistingLottery`/`mergeLotteryData`）は Worker側**、**抽出・分類・LLM提案（`classifyPost`/`extractLotteryData`/`claudeClient`）は scraper側**に配置（§1 の責務分離に準拠）。
+> test.md のモジュール分割意図を尊重しつつ、**確定・正規化・DB系（`normalize*`/`resolveDates`(再検証)/`matchExistingLottery`/`mergeLotteryData`）は Worker側**、**抽出・分類（`classifyPost`/`extractLotteryData`/`classifyUrls`）は scraper側**に配置（§1 の責務分離に準拠）。
 
 ### 既存コードの再利用
 
@@ -154,16 +155,12 @@ apps/worker/              # Cloudflare Workers + Turso
 
 ### 追加・明確化するカラム／テーブル
 
-- **`post_analyses`（再解析性）**: 以下のカラムを保存する。
-  - `parserVersion` / `promptVersion` / `modelId` / `inputContentHash` / `analyzedAt`
-  - **再解析する条件**（いずれか）:
-    - `source_posts.contentHash` が前回の `inputContentHash` と異なる
-    - `parserVersion` が異なる
-    - `promptVersion` が異なる
-    - `modelId` が異なる
-    - 前回の解析ステータスが `failed` または `needs_review` で、再試行条件（最大試行未満・`nextRetryAt` 経過）を満たす
-  - **再利用（Claude 再実行しない）条件**: 同じ `inputContentHash` × `parserVersion` × `promptVersion` × `modelId` の組み合わせで**解析成功済み**なら、Claude API を再実行せず既存解析結果を再利用する。
-  - post_analysis だけが失敗しても、対象を `needs_review` にして **再解析可能**にする（source_posts は保持済みなので、バージョン更新時に再解析できる）。
+- **`post_analyses`（再解析性）**: 以下のカラムを保存する。LLM 関連カラム（`promptVersion`/`modelId` 等）は持たない。
+  - `parserVersion`（ルール解析器のバージョン。例 v1 / v1.1 / v2） / `inputContentHash` / `analysisStatus` / `analyzedAt` / `errorMessage`
+  - **再解析判定は `inputContentHash`（= `source_posts.content_hash`）× `parserVersion` の2キー**:
+    - contentHash が変わる、または parserVersion が上がれば再解析（`inserted`）
+    - contentHash と parserVersion が両方一致すれば再解析しない（`reused`）
+  - post_analysis だけが失敗しても、対象を `needs_review` にして **再解析可能**にする（source_posts は保持済みなので、投稿本文の変化時に再解析できる）。
 - **`lotteries`（⑤正規化前情報の保持）**: 以下を追加し、**正規化前の Raw 値を必ず保持**する。
   - `productNameRaw` / `normalizedProductName`
   - `storeNameRaw` / `normalizedStoreName`
@@ -175,7 +172,7 @@ apps/worker/              # Cloudflare Workers + Turso
   - `attempts`（試行回数）/ `nextRetryAt`（次回リトライ時刻）/ `lastError`（最終エラー）
   - **排他制御用**: `lockedAt` / `lockedBy` / `completedAt` / `createdAt` / `updatedAt`
   - 加えて `id` / `sourcePostId`（or `lotteryId`）。
-  - **重複ジョブ防止**: `jobType` × `sourcePostId` × `parserVersion` × `promptVersion` × `modelId` の組み合わせで、同一処理が二重登録されないようにする（UNIQUE 制約 or 事前チェック）。
+  - **重複ジョブ防止**: `jobType` × `sourcePostId` × `parserVersion` × `inputContentHash` の組み合わせで、同一処理が二重登録されないようにする（UNIQUE 制約 or 事前チェック）。
   - **ジョブ取得（ワーカー実行）時のルール**:
     - `pending` のみ取得する
     - **ロック取得に成功した処理だけ実行**（`lockedAt`/`lockedBy` をアトミックにセット）
@@ -202,19 +199,19 @@ apps/worker/              # Cloudflare Workers + Turso
 - `.github/workflows/scrape.yml`（cron5分, workflow_dispatch, concurrency, auth.json をBase64 Secretから一時復元, Playwright install）。
 - テスト: DOM抽出(#19 さらに表示前後 / #20 data-testid堅牢性)、contentHash重複(#14)。
 
-### Phase 2 — 分類 + 単一抽選抽出
+### Phase 2 — 分類 + 単一抽選抽出（100% ルールベース）
 - ルール分類器（postType/isLotteryInformation/cardType）。「抽選」語のみで判定せず `lottery_preparation` を判別（会員登録/購入履歴/～に備えて 等）。
 - ルールで 1店舗1商品抽出 + `resolveDates`（precision/status、年省略→投稿日+月+曜日で推定、曜日不一致は `conflicting`/`yearInferred`）。
-- `claudeClient` + ゲーティング（複雑/曖昧のみLLM）、**Zod検証**。
+- ゲーティング（ルールのみ）: 複雑/曖昧な投稿はルール単一抽出 + `needs_review`（分割は Phase 3）、**Zod検証**。LLM は使用しない。
 - **簡易URL処理（ルールのみ・ここへ移動）**: DOM内アンカーから取得済みの**展開後 `href` を保存**し、`domain` を抽出。以下の**明確なURL種別だけルール分類**する。
   - `x_post` / `image` / `app_download` / `membership_registration` / `application` / `official_information` / `unknown`
   - App Store・Google Play → `app_download` ／ X投稿URL → `x_post` ／ 画像URL → `image` ／ 会員登録ページ → `membership_registration`
   - ※ **リダイレクト追跡による最終URL解決（`resolvedUrl`/`finalUrl`/`httpStatus`）は Phase 4** で行う。Phase 2 は「DOMから取れる展開後hrefの保存＋ドメインと明確な種別のルール分類」までに留める。
-- Worker: `post_analyses`（+マイグレーション）保存。**`parserVersion`/`promptVersion`/`modelId`/`inputContentHash` を記録**し、解析失敗時は `needs_review` にして再解析可能にする。`lotteries` 挿入（マッチングは簡易）。
+- Worker: `post_analyses`（+マイグレーション）保存。**`parserVersion`/`inputContentHash` を記録**し、再解析判定は `inputContentHash` のみ（変化時のみ再解析）。解析不確定時は `needs_review`。`lotteries` 挿入（マッチングは簡易）。
 - テスト: #4,#9,#10,#11,#12,#13,#17,#18。
 
 ### Phase 3 — 複数分割 + 同一判定 + 統合 + 履歴
-- Claudeで複数店舗/商品の分割・別セクション（応募期間↔当選発表）の**商品名キー対応付け**。
+- 複数店舗/商品の分割・別セクション（応募期間↔当選発表）の**商品名キー対応付け**（ルール高度化で対応。LLM は使用しない）。
 - **⑪ Worker の責務を明記**: 取込された投稿の **重複判定・同一抽選マッチング・情報統合・変更履歴保存** はすべて Worker 側が担当する（Turso の既存抽選を読む必要があるため）。URL解決は Phase 4 で `processing_jobs`（`resolve_urls`）として非同期実行。
 - Worker `services/matchExistingLottery`:
   - **④ スコア判定前の「禁止条件（ハードブロック）」を先に評価する。** 以下のいずれかに該当する場合は、**スコアが高くても自動統合しない**（新規 or 要確認とする）:
@@ -269,15 +266,13 @@ apps/worker/              # Cloudflare Workers + Turso
 
 ---
 
-## 8. LLM（Claude）失敗時の処理
+## 8. 解析失敗時の処理（ルールベース）
 
-- 解析ステータスを `failed` または `needs_review` にする。
-- `errorCode` と `errorMessage` を保存する。
-- `processing_jobs` に**再試行情報**（`attempts`/`nextRetryAt`）を保存する。
+- 解析ステータスを `failed` または `needs_review` にする（LLM を使わないため API 由来の失敗は発生しない）。
+- `errorMessage` を保存する。
 - **既存の `lotteries` は更新しない**（失敗で確定値を壊さない）。
-- **レート制限や一時障害は指数バックオフ**でリトライ。
-- **JSON不正や Zod 不一致は、同一モデルへの無限再試行をしない**（スキーマ違反は待っても直らないため）。
-- 最大試行回数を超えた場合は**手動確認対象（needs_review）**にする。
+- 判定不能・分割不能（複数店舗/商品など）は `needs_review` にして**手動確認対象**にする。
+- 再解析は `inputContentHash` の変化時のみ（投稿本文が変われば再解析される）。
 
 ---
 
@@ -293,6 +288,6 @@ apps/worker/              # Cloudflare Workers + Turso
 
 - **アカウント凍結リスク大**: GitHub Actions のデータセンタ IP から**ログイン状態で5分間隔**のスクレイピングは Xのbot検知・凍結リスクが高い。捨て垢必須。頻度緩和や residential proxy 検討の余地。ToS抵触は継続。
 - **auth.json のセッション寿命**: 期限切れ/再認証で失敗しうる→失敗検知と再ログイン運用（Secret更新）が必要。
-- **LLM抽出の不確実性**: ゲーティング+Zod+日時ルール再検証で低減するが誤りは残る→`needs_review` と履歴で回収。
+- **ルール抽出の不確実性**: 分類・抽出の取りこぼしは残る→複雑/曖昧な投稿は `needs_review` と履歴で回収。分割・意味的対応付けは Phase 3 でルールを高度化。
 - **URL解決**: 一部は最終URL到達不可/認証要で null 許容。
-- **コスト**: Claude API（複雑投稿のみ）と GA 実行時間。5分間隔だと積み上がる→ゲーティングと contentHash 未変化スキップで抑制。
+- **コスト**: GA 実行時間のみ（LLM API コストなし）。5分間隔でも contentHash 未変化スキップ（`reused`）で無駄な再解析を抑制。

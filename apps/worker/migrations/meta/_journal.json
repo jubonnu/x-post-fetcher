@@ -8,6 +8,27 @@
       "when": 1784899957289,
       "tag": "0000_modern_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1784902985450,
+      "tag": "0001_rapid_kinsey_walden",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1784905393754,
+      "tag": "0002_stiff_changeling",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1784907127309,
+      "tag": "0003_next_serpent_society",
+      "breakpoints": true
     }
   ]
 }

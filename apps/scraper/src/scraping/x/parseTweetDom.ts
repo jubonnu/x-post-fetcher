@@ -11,6 +11,11 @@ import {
  * 本番（Playwright が取得した outerHTML）と fixture テストの両方で同じ関数を使う。
  * linkedom で DOM 化するためブラウザ不要。
  */
+export interface ExternalLink {
+  href: string;
+  text: string;
+}
+
 export interface RawPost {
   tweetId: string;
   authorId: string | null;
@@ -20,6 +25,8 @@ export interface RawPost {
   publishedAt: string | null; // ISO8601
   sourceUrl: string;
   externalUrls: string[];
+  /** リンクの href と表示テキスト（展開ドメインを含む）。URL分類に使う */
+  externalLinks: ExternalLink[];
   imageUrls: string[];
   rawHtml: string;
   cleanedHtml: string;
@@ -96,6 +103,7 @@ function parseReactArticle(article: Element, rawHtml: string, cleanedHtml: strin
 
   const textEl = article.querySelector(TWEET_TEXT_SELECTOR);
   const bodyText = textEl ? normalizeText(extractText(textEl as Element)) : "";
+  const externalLinks = collectLinks(article);
 
   return {
     tweetId,
@@ -105,7 +113,8 @@ function parseReactArticle(article: Element, rawHtml: string, cleanedHtml: strin
     bodyText,
     publishedAt,
     sourceUrl,
-    externalUrls: collectExternalUrls(article),
+    externalUrls: externalLinks.map((l) => l.href),
+    externalLinks,
     imageUrls: collectImageUrls(article),
     rawHtml,
     cleanedHtml,
@@ -145,6 +154,7 @@ function parseSsrArticle(article: Element, rawHtml: string, cleanedHtml: string)
     }
   }
 
+  const externalLinks = collectLinks(article);
   return {
     tweetId,
     authorId,
@@ -153,23 +163,27 @@ function parseSsrArticle(article: Element, rawHtml: string, cleanedHtml: string)
     bodyText,
     publishedAt,
     sourceUrl: sourceUrl || (authorUsername ? `https://x.com/${authorUsername}/status/${tweetId}` : ""),
-    externalUrls: collectExternalUrls(article),
+    externalUrls: externalLinks.map((l) => l.href),
+    externalLinks,
     imageUrls: collectImageUrls(article),
     rawHtml,
     cleanedHtml,
   };
 }
 
-/** 本文内リンク（t.co や外部http）を収集 */
-function collectExternalUrls(article: Element): string[] {
-  const urls = new Set<string>();
+/** 本文内リンク（t.co や外部http）を href と表示テキスト付きで収集 */
+function collectLinks(article: Element): ExternalLink[] {
+  const seen = new Set<string>();
+  const links: ExternalLink[] = [];
   for (const a of Array.from(article.querySelectorAll("a[href]")) as Element[]) {
     const href = a.getAttribute("href") ?? "";
     if (!/^https?:\/\//i.test(href)) continue;
     if (/^https?:\/\/(x|twitter)\.com\//i.test(href) && /\/status\/|\/photo\//.test(href)) continue; // 自己リンク除外
-    urls.add(href);
+    if (seen.has(href)) continue;
+    seen.add(href);
+    links.push({ href, text: ((a as any).textContent ?? "").trim() });
   }
-  return [...urls];
+  return links;
 }
 
 /**

@@ -2,10 +2,12 @@ import type { Hono } from "hono";
 import { IngestPayloadSchema } from "@x-post/shared";
 import type { AppEnv } from "../env.ts";
 import { upsertSourcePost } from "../repositories/sourcePostRepository.ts";
+import { persistAnalysis } from "../repositories/analysisRepository.ts";
 
 /**
  * POST /ingest — 内部取込API（Bearer 認証）。
- * Phase 1: sourcePost のみを検証して upsert。analysis は受け取っても無視する。
+ * sourcePost を upsert し、analysis があれば contentHash 判定のうえ永続化する
+ * （同一 contentHash は reused、変われば inserted で再解析）。
  */
 export function registerIngest(app: Hono<AppEnv>): void {
   app.post("/ingest", async (c) => {
@@ -30,12 +32,27 @@ export function registerIngest(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "validation_failed", issues: parsed.error.issues }, 422);
     }
 
-    // --- upsert（externalPostId / contentHash） ---
+    // --- sourcePost upsert（externalPostId / contentHash） ---
+    const db = c.get("db");
+    let result;
     try {
-      const result = await upsertSourcePost(c.get("db"), parsed.data.sourcePost);
-      return c.json({ ok: true, ...result });
+      result = await upsertSourcePost(db, parsed.data.sourcePost);
     } catch (e) {
       return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
     }
+
+    // --- analysis 永続化（あれば）。解析失敗でも sourcePost は保持済み ---
+    let analysis: { action: string; lotteryCount: number } | undefined;
+    if (parsed.data.analysis) {
+      try {
+        analysis = await persistAnalysis(db, result.sourcePostId, parsed.data.analysis);
+      } catch (e) {
+        // 同一判定/統合の失敗は元投稿＋解析を保持し、解析だけ failed 扱いにする
+        analysis = { action: "failed", lotteryCount: 0 };
+        console.error(`[ingest] analysis 永続化失敗: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    return c.json({ ok: true, ...result, ...(analysis ? { analysis } : {}) });
   });
 }

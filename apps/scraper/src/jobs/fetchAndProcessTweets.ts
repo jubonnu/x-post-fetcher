@@ -1,6 +1,7 @@
 import { computeContentHash, type IngestPayload, type SourcePostInput } from "@x-post/shared";
 import { fetchTweets } from "../scraping/x/fetchTweets.ts";
 import type { RawPost } from "../scraping/x/parseTweetDom.ts";
+import { analyzePost } from "../lottery/analyzePost.ts";
 
 /**
  * バッチ: X を取得 → sourcePost payload を組み立て → Worker の /ingest へ POST。
@@ -53,7 +54,14 @@ async function main(): Promise<void> {
 
   const counts: Record<string, number> = { inserted: 0, updated: 0, unchanged: 0, failed: 0 };
   for (const p of posts) {
-    const payload: IngestPayload = { batchId, sourcePost: await buildSourcePost(p) };
+    // 解析（分類＋抽出）。1件の解析失敗でバッチを止めない（sourcePostは必ず送る）
+    let analysis: IngestPayload["analysis"] = null;
+    try {
+      analysis = await analyzePost(p);
+    } catch (e) {
+      console.warn(`[scrape] tweetId=${p.tweetId} 解析失敗（生投稿のみ送信）: ${e instanceof Error ? e.message : e}`);
+    }
+    const payload: IngestPayload = { batchId, sourcePost: await buildSourcePost(p), analysis };
     try {
       const res = await fetch(ingestUrl, {
         method: "POST",

@@ -9,7 +9,8 @@
     "./schemas": "./src/schemas.ts",
     "./types": "./src/types.ts",
     "./utils/hash": "./src/utils/hash.ts",
-    "./utils/url": "./src/utils/url.ts"
+    "./utils/url": "./src/utils/url.ts",
+    "./utils/date": "./src/utils/date.ts"
   },
   "scripts": {
     "test": "vitest run",

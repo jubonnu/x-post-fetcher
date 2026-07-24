@@ -13,10 +13,29 @@ apps/worker       … Hono + Drizzle + libSQL、内部取込API /ingest（Cloudf
 
 ---
 
-## Phase 1（現状: 保存層 + 生データ抽出）
+## Phase 2（分類 + 単一抽選抽出・100% ルールベース）
 
-`GitHub Actions → Playwright → (Claude) → Cloudflare Workers → Turso` のうち、**Phase 1 は保存層と生データ抽出まで**。
-Claude 解析・分類・抽選抽出・同一判定・履歴統合・URL解決は **Phase 2 以降（未実装）**。
+`GitHub Actions → Playwright → Cloudflare Workers → Turso`。**Phase 2 まで実装済み**。
+解析は **100% ルールベース**で行い、**LLM（Claude / Anthropic SDK）・API キー・モデル管理は使用しない**。
+Phase 3（複数分割・同一マッチング・履歴統合）／Phase 4（URLリダイレクト実解決）は未実装。
+
+- **分類（ルール）**: `postType` / `isLotteryInformation` / `cardType`。「抽選」語だけで判定せず、
+  会員登録・「備えて」等の事前準備は `lottery_preparation`（抽選情報ではない）に分ける。
+- **単一抽選抽出（ルール）**: 商品/店舗の Raw 値、`resolveDate`（年推定・曜日整合・`store_closing_time`・
+  precision/status）、応募URL/公式/アプリDLの割当。
+- **URL 分類（ルール）**: `app_download`（App Store/Google Play）/`x_post`/`image`/`membership_registration`/
+  `application`/`official_information`/`unknown`。表示テキストの展開ドメインで判定。実解決は Phase 4。
+- **ゲーティング（ルールのみ）**: 明確な非抽選は抽選抽出しない。単純な1店舗1商品はルール抽出で確定
+  （商品/店舗が欠ければ `needs_review`）。複数店舗・複数商品・複数セクションは**ルールでは分割できない**ため
+  ルール単一抽出 + `needs_review`（分割は Phase 3）。
+- **Worker 永続化・再解析判定**: `post_analyses`（`parserVersion`/`inputContentHash`/`analysisStatus` 等）と
+  `lotteries`（**正規化は Worker 責務**）。**再解析は `inputContentHash`（= `source_posts.content_hash`）× `parserVersion`
+  の2キーで判定**: 両方一致する解析が既にあれば **reused**（再解析しない）、本文（contentHash）が変わる、または
+  `parserVersion` が上がる（ルール解析器が改善される）と **inserted**（必ず再解析）。
+
+---
+
+## Phase 1（保存層 + 生データ抽出）
 
 ### 主要コマンド
 
