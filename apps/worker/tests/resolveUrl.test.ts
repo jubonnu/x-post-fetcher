@@ -1,44 +1,65 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { resolveUrl } from "../src/services/resolveUrl.ts";
 
+/** モックレスポンスを作るヘルパー（redirect: "manual" 対応）。 */
+function mockResponse(status: number, location?: string) {
+  return {
+    status,
+    headers: { get: (h: string) => (h.toLowerCase() === "location" ? (location ?? null) : null) },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("resolveUrl", () => {
-  it("正常なURLは resolvedUrl と status 200 を返す", async () => {
+  it("正常なURLは resolvedUrl と status 200 を返す（リダイレクト追跡）", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ url: "https://example.com/final", status: 200 })
+      vi
+        .fn()
+        .mockResolvedValueOnce(mockResponse(301, "https://example.com/final"))
+        .mockResolvedValueOnce(mockResponse(200))
     );
     const r = await resolveUrl("https://t.co/abc123");
     expect(r.resolvedUrl).toBe("https://example.com/final");
     expect(r.httpStatus).toBe(200);
     expect(r.error).toBeNull();
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
   });
 
-  it("HEAD 405 → GET にフォールバックして最終 URL を取得", async () => {
+  it("リダイレクトなし（200 直返し）は元 URL をそのまま返す", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(200)));
+    const r = await resolveUrl("https://example.com/page");
+    expect(r.resolvedUrl).toBe("https://example.com/page");
+    expect(r.httpStatus).toBe(200);
+    expect(r.error).toBeNull();
+  });
+
+  it("HEAD 405 → GET にフォールバックしてリダイレクト追跡", async () => {
     vi.stubGlobal(
       "fetch",
       vi
         .fn()
-        .mockResolvedValueOnce({ url: "https://t.co/abc", status: 405 })
-        .mockResolvedValueOnce({ url: "https://example.com/final", status: 200 })
+        // hop=0: HEAD → 405
+        .mockResolvedValueOnce(mockResponse(405))
+        // hop=0 fallback: GET → 301
+        .mockResolvedValueOnce(mockResponse(301, "https://example.com/final"))
+        // hop=1: HEAD → 200
+        .mockResolvedValueOnce(mockResponse(200))
     );
     const r = await resolveUrl("https://t.co/abc");
     expect(r.resolvedUrl).toBe("https://example.com/final");
     expect(r.httpStatus).toBe(200);
-    // 2回 fetch が呼ばれた（HEAD + GET）
-    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2);
+    // 3回 fetch が呼ばれた（HEAD + GET + HEAD）
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3);
   });
 
-  it("404 は resolvedUrl と status 404 を返す", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ url: "https://example.com/not-found", status: 404 })
-    );
+  it("404 は resolvedUrl（現在 URL）と status 404 を返す", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(mockResponse(404)));
     const r = await resolveUrl("https://t.co/missing");
-    expect(r.resolvedUrl).toBe("https://example.com/not-found");
+    expect(r.resolvedUrl).toBe("https://t.co/missing");
     expect(r.httpStatus).toBe(404);
     expect(r.error).toBeNull();
   });

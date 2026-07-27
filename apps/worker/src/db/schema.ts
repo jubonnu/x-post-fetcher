@@ -115,6 +115,9 @@ export const lotteries = sqliteTable("lotteries", {
   approvedAt: text("approved_at"),
   rejectedReason: text("rejected_reason"),
   rejectedAt: text("rejected_at"),
+  // Phase 6 (hardening): ライフサイクル管理（物理削除なし）
+  lifecycleStatus: text("lifecycle_status").notNull().default("active"), // active / orphaned / archived
+  orphanedAt: text("orphaned_at"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),

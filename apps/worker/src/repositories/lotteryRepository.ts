@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, ne } from "drizzle-orm";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db } from "../db/client.ts";
 import {
@@ -107,7 +107,8 @@ const CREATED_HISTORY_FIELDS: (keyof ReturnType<typeof toLotteryRow>)[] = [
 
 /**
  * この sourcePost がかつて寄与した抽選への貢献（sources / history）を取り消し、
- * 孤立した（どの source も残らない）抽選を削除する。再解析の冪等性のため。
+ * 孤立した（どの source も残らない）抽選を sofft-delete（lifecycleStatus=orphaned）にする。
+ * 物理削除は行わない。
  */
 async function unlinkSourceContributions(db: Db, sourcePostId: number): Promise<void> {
   const prior = await db
@@ -127,8 +128,11 @@ async function unlinkSourceContributions(db: Db, sourcePostId: number): Promise<
   const stillLinked = new Set(remaining.map((r) => r.lotteryId));
   const orphaned = touchedIds.filter((id) => !stillLinked.has(id));
   if (orphaned.length > 0) {
-    await db.delete(lotteryFieldHistory).where(inArray(lotteryFieldHistory.lotteryId, orphaned));
-    await db.delete(lotteries).where(inArray(lotteries.id, orphaned));
+    const now = new Date().toISOString();
+    await db
+      .update(lotteries)
+      .set({ lifecycleStatus: "orphaned", orphanedAt: now, updatedAt: now })
+      .where(inArray(lotteries.id, orphaned));
   }
 }
 
@@ -154,11 +158,30 @@ export async function syncLotteriesFromAnalysis(
 
     if (m.action === "merge" && m.matchedIndex !== null) {
       const target = existing[m.matchedIndex];
+
+      // rejected は自動取込で一切変更しない
+      if (target.verificationStatus === "rejected") {
+        continue;
+      }
+
       const merged = mergeLotteryData(target as unknown as Record<string, string | null>, candidate as unknown as Record<string, string | null>);
-      if (Object.keys(merged.updates).length > 0 || merged.hasConflict) {
+      // approved は重要フィールドを上書きしない。needs_review に降格して再確認を促す
+      const newVerificationStatus =
+        target.verificationStatus === "approved" ? "needs_review" : merged.verificationStatus;
+      // orphaned lottery が再び source と一致したら active に戻す（rejected 以外）
+      const lifecycleUpdate =
+        target.lifecycleStatus !== "active" ? { lifecycleStatus: "active", orphanedAt: null } : {};
+
+      const needsUpdate =
+        Object.keys(merged.updates).length > 0 ||
+        merged.hasConflict ||
+        Object.keys(lifecycleUpdate).length > 0 ||
+        newVerificationStatus !== target.verificationStatus;
+
+      if (needsUpdate) {
         await db
           .update(lotteries)
-          .set({ ...merged.updates, verificationStatus: merged.verificationStatus, updatedAt: new Date().toISOString() })
+          .set({ ...merged.updates, verificationStatus: newVerificationStatus, ...lifecycleUpdate, updatedAt: new Date().toISOString() })
           .where(eq(lotteries.id, target.id));
       }
       for (const c of merged.changes) {
@@ -246,15 +269,21 @@ export interface ListLotteriesResult {
   total: number;
 }
 
-/** 公開 GET /lotteries 用の一覧取得（ページネーション + フィルタ）。 */
+/** 公開 GET /lotteries 用の一覧取得（ページネーション + フィルタ）。
+ * デフォルトで rejected + orphaned/archived を除外する。
+ */
 export async function listLotteries(db: Db, opts: ListLotteriesOptions = {}): Promise<ListLotteriesResult> {
   const { cardType, verificationStatus, limit = 20, offset = 0 } = opts;
 
   const conditions = [
+    // rejected は公開しない
+    ne(lotteries.verificationStatus, "rejected"),
+    // orphaned / archived は公開しない
+    eq(lotteries.lifecycleStatus, "active"),
     ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
     ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : []),
   ];
-  const where = conditions.length > 0 ? and(...conditions) : undefined;
+  const where = and(...conditions);
 
   const [rows, [{ total }]] = await Promise.all([
     db
@@ -266,6 +295,7 @@ export async function listLotteries(db: Db, opts: ListLotteriesOptions = {}): Pr
       .offset(offset),
     db.select({ total: count() }).from(lotteries).where(where),
   ]);
+
 
   return { lotteries: rows, total };
 }
