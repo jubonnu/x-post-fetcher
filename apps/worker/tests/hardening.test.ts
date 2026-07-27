@@ -113,7 +113,7 @@ describe("approved/rejected 保護", () => {
     expect(row.verificationStatus).toBe("rejected");
   });
 
-  it("approved lottery は自動取込で needs_review に降格する（フィールドは保護）", async () => {
+  it("approved lottery は完全同一内容の再取込で approved を維持する", async () => {
     const [inserted] = await db
       .insert(lotteries)
       .values({
@@ -127,6 +127,8 @@ describe("approved/rejected 保護", () => {
         status: "open",
         applicationEndDate: "2025-12-31",
         applicationEndPrecision: "date_only",
+        approvedBy: "admin",
+        approvedAt: "2025-11-01T00:00:00.000Z",
       })
       .returning({ id: lotteries.id });
 
@@ -134,20 +136,130 @@ describe("approved/rejected 保護", () => {
       .insert(sourcePosts)
       .values({
         platform: "x",
-        externalPostId: `approved-test-${Date.now()}`,
+        externalPostId: `approved-same-${Date.now()}`,
         sourceUrl: "https://x.com/test/2",
-        bodyRaw: "承認テスト",
-        contentHash: `hash-approved-${Date.now()}`,
+        bodyRaw: "承認テスト（同一内容）",
+        contentHash: `hash-approved-same-${Date.now()}`,
         fetchedAt: new Date().toISOString(),
       })
       .returning({ id: sourcePosts.id });
 
+    // 同一の商品・店舗・締切で再取込（conflicts なし）
     const candidate = toLotteryRow(sp.id, makeLottery({ productNameRaw: "承認済み商品", storeNameRaw: "テスト店" }));
     await syncLotteriesFromAnalysis(db, sp.id, [candidate]);
 
     const [row] = await db.select().from(lotteries).where(eq(lotteries.id, inserted.id));
-    // approved → needs_review に降格（要再確認）
+    // 同一内容 → approved 維持
+    expect(row.verificationStatus).toBe("approved");
+    // approvedBy / approvedAt が監査情報として維持されている
+    expect(row.approvedBy).toBe("admin");
+    expect(row.approvedAt).toBe("2025-11-01T00:00:00.000Z");
+  });
+
+  it("approved lottery は空欄補完のみの再取込で approved を維持する", async () => {
+    const [inserted] = await db
+      .insert(lotteries)
+      .values({
+        productNameRaw: "承認済み商品B",
+        normalizedProductName: "承認済み商品B",
+        cardType: "pokemon",
+        storeNameRaw: "テスト店",
+        normalizedStoreName: "テスト店",
+        verificationStatus: "approved",
+        lifecycleStatus: "active",
+        status: "open",
+        applicationEndDate: "2025-12-31",
+        applicationEndPrecision: "date_only",
+        applicationUrl: null, // ← 空欄（補完対象）
+        approvedBy: "admin",
+        approvedAt: "2025-11-01T00:00:00.000Z",
+      })
+      .returning({ id: lotteries.id });
+
+    const [sp] = await db
+      .insert(sourcePosts)
+      .values({
+        platform: "x",
+        externalPostId: `approved-fill-${Date.now()}`,
+        sourceUrl: "https://x.com/test/fill",
+        bodyRaw: "承認テスト（空欄補完）",
+        contentHash: `hash-approved-fill-${Date.now()}`,
+        fetchedAt: new Date().toISOString(),
+      })
+      .returning({ id: sourcePosts.id });
+
+    // applicationUrl を持つ候補（既存は null → 空欄補完）
+    const candidate = toLotteryRow(
+      sp.id,
+      makeLottery({
+        productNameRaw: "承認済み商品B",
+        storeNameRaw: "テスト店",
+        applicationUrl: "https://apply.example.com",
+      })
+    );
+    await syncLotteriesFromAnalysis(db, sp.id, [candidate]);
+
+    const [row] = await db.select().from(lotteries).where(eq(lotteries.id, inserted.id));
+    // 空欄補完のみ → approved 維持
+    expect(row.verificationStatus).toBe("approved");
+    // applicationUrl が補完されている
+    expect(row.applicationUrl).toBe("https://apply.example.com");
+    // approvedBy / approvedAt が維持されている
+    expect(row.approvedBy).toBe("admin");
+    expect(row.approvedAt).toBe("2025-11-01T00:00:00.000Z");
+  });
+
+  it("approved lottery は重要フィールド（applicationUrl）の競合時だけ needs_review になる", async () => {
+    const [inserted] = await db
+      .insert(lotteries)
+      .values({
+        productNameRaw: "承認済み商品C",
+        normalizedProductName: "承認済み商品C",
+        cardType: "pokemon",
+        storeNameRaw: "テスト店",
+        normalizedStoreName: "テスト店",
+        verificationStatus: "approved",
+        lifecycleStatus: "active",
+        status: "open",
+        applicationEndDate: "2025-12-31",
+        applicationEndPrecision: "date_only",
+        applicationUrl: "https://old.example.com", // ← 競合対象
+        approvedBy: "admin",
+        approvedAt: "2025-11-01T00:00:00.000Z",
+      })
+      .returning({ id: lotteries.id });
+
+    const [sp] = await db
+      .insert(sourcePosts)
+      .values({
+        platform: "x",
+        externalPostId: `approved-conflict-${Date.now()}`,
+        sourceUrl: "https://x.com/test/conflict",
+        bodyRaw: "承認テスト（競合）",
+        contentHash: `hash-approved-conflict-${Date.now()}`,
+        fetchedAt: new Date().toISOString(),
+      })
+      .returning({ id: sourcePosts.id });
+
+    // applicationUrl が異なる候補（重要フィールド競合）
+    const candidate = toLotteryRow(
+      sp.id,
+      makeLottery({
+        productNameRaw: "承認済み商品C",
+        storeNameRaw: "テスト店",
+        applicationUrl: "https://new.example.com", // ← 既存と異なる値 → 競合
+      })
+    );
+    await syncLotteriesFromAnalysis(db, sp.id, [candidate]);
+
+    const [row] = await db.select().from(lotteries).where(eq(lotteries.id, inserted.id));
+    // 重要フィールド競合 → needs_review に降格
     expect(row.verificationStatus).toBe("needs_review");
+    // 既存の承認済み値は上書きされていない（conflicting は既存値を維持）
+    expect(row.applicationUrl).toBe("https://old.example.com");
+    // approvedBy / approvedAt は監査情報として維持されている
+    expect(row.approvedBy).toBe("admin");
+    expect(row.approvedAt).toBe("2025-11-01T00:00:00.000Z");
   });
 
   it("rejected lottery は GET /lotteries に表示されない", async () => {

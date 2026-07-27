@@ -16,8 +16,29 @@ import {
   normalizeStoreName,
 } from "../services/normalize.ts";
 import { matchExistingLottery, type MatchOptions } from "../services/matchExistingLottery.ts";
-import { mergeLotteryData } from "../services/mergeLotteryData.ts";
+import { mergeLotteryData, type FieldChange } from "../services/mergeLotteryData.ts";
 import { enqueueJob } from "./processingJobRepository.ts";
+
+/**
+ * approved 状態を needs_review に降格させる「重要フィールド」セット。
+ * このフィールドに conflicting な変更がある場合のみ approved → needs_review となる。
+ * 空欄補完・非競合更新・同一内容では approved を維持する。
+ */
+const APPROVED_CONFLICT_FIELDS = new Set([
+  "productNameRaw", "normalizedProductName",
+  "storeNameRaw", "normalizedStoreName",
+  "storeBranchRaw", "normalizedStoreBranch",
+  "applicationStartAt",
+  "applicationEndDate",      // DATE_GROUPS は g.date のフィールド名で記録される
+  "resultAnnouncementDate",  // 同上
+  "purchaseDeadlineAt",
+  "applicationUrl",
+]);
+
+/** 重要フィールドに競合（conflicting）な変更があるか判定する。 */
+function hasImportantFieldConflict(changes: FieldChange[]): boolean {
+  return changes.some((c) => c.changeType === "conflicting" && APPROVED_CONFLICT_FIELDS.has(c.fieldName));
+}
 
 /** completenessScore（0-1）: 商品/店舗=必須, 締切/当選/URL=重要 */
 function completeness(l: ExtractedLottery): number {
@@ -165,9 +186,13 @@ export async function syncLotteriesFromAnalysis(
       }
 
       const merged = mergeLotteryData(target as unknown as Record<string, string | null>, candidate as unknown as Record<string, string | null>);
-      // approved は重要フィールドを上書きしない。needs_review に降格して再確認を促す
+      // approved は「重要フィールドへの競合」がある場合のみ needs_review に降格する。
+      // 同一内容・空欄補完・非重要フィールドの更新では approved を維持する。
+      // approvedBy / approvedAt は競合時も監査情報として維持する（SET 句に含めない）。
       const newVerificationStatus =
-        target.verificationStatus === "approved" ? "needs_review" : merged.verificationStatus;
+        target.verificationStatus === "approved"
+          ? hasImportantFieldConflict(merged.changes) ? "needs_review" : "approved"
+          : merged.verificationStatus;
       // orphaned lottery が再び source と一致したら active に戻す（rejected 以外）
       const lifecycleUpdate =
         target.lifecycleStatus !== "active" ? { lifecycleStatus: "active", orphanedAt: null } : {};
