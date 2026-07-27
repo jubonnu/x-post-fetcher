@@ -12,6 +12,7 @@
     "login": "npm run login -w @x-post/scraper",
     "fetch": "npm run fetch -w @x-post/scraper",
     "scrape": "npm run scrape -w @x-post/scraper",
+    "analyze": "npm run analyze -w @x-post/scraper",
     "worker:dev": "npm run dev -w @x-post/worker",
     "db:generate": "npm run db:generate -w @x-post/worker",
     "db:migrate": "npm run db:migrate -w @x-post/worker",

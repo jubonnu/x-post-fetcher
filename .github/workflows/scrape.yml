@@ -47,6 +47,14 @@ jobs:
           MAX_POSTS: "14"
         run: npm run scrape
 
+      # scrape で enqueue された analyze_post ジョブを処理する（auth.json 不要）
+      - name: Run analyze_post jobs
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+          MAX_JOBS: "10"
+        run: npm run analyze
+
       # auth.json を必ず削除（Artifact/後続に残さない）
       - name: Cleanup auth.json
         if: always()
