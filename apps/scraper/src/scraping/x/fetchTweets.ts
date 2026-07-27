@@ -3,7 +3,8 @@ import { access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { AUTH_STATE } from "../../paths.ts";
 import { ARTICLE_SELECTOR } from "./selectors.ts";
-import { parseTweetArticle, type RawPost } from "./parseTweetDom.ts";
+import { type RawPost } from "./parseTweetDom.ts";
+import { processPageHtmls } from "./postFilter.ts";
 
 export interface FetchOptions {
   targetUser?: string;
@@ -45,7 +46,9 @@ async function expandAllPosts(page: Page): Promise<void> {
 }
 
 /**
- * X プロフィールから最新 maxPosts 件の投稿を生データで取得する。
+ * X プロフィールから有効 maxPosts 件の投稿を生データで取得する。
+ *  - TARGET_USER 本人の投稿のみ採用（別ユーザー投稿・固定投稿は除外してログ出力）
+ *  - フィルタ後に maxPosts 件集まるまでスクロールを継続する
  *  - auth.json があればログイン状態（連続した最新投稿・翻訳解除が可能）
  *  - 画像/動画/フォントはDLブロック（URLは DOM から抽出するので不要）
  *  - 抽出は parseTweetArticle（linkedom）に一本化
@@ -111,25 +114,27 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<RawPost[]> {
       );
 
       const before = collected.size;
-      for (const html of htmls) {
-        // 1件の抽出失敗（DOM/画像解析エラー等）でバッチ全体を止めない
-        try {
-          const post = parseTweetArticle(html);
-          if (post?.tweetId && !collected.has(post.tweetId)) collected.set(post.tweetId, post);
-        } catch (e) {
-          console.warn(`[fetch] 1件の抽出に失敗（スキップ）: ${e instanceof Error ? e.message : e}`);
-        }
-      }
+      processPageHtmls(htmls, targetUser, collected);
 
       if (collected.size >= maxPosts) break;
+
       if (collected.size === before) {
-        if (++noGrowth >= 3) break;
+        if (++noGrowth >= 3) {
+          console.warn(`[fetch] スクロール停止（${noGrowth}回連続で新規投稿なし）`);
+          break;
+        }
       } else {
         noGrowth = 0;
       }
 
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
       await page.waitForTimeout(1500);
+    }
+
+    if (collected.size < maxPosts) {
+      console.warn(
+        `[fetch] 有効件数が目標未満: ${collected.size}/${maxPosts}（別ユーザー・固定投稿除外後）`
+      );
     }
 
     const sorted = [...collected.values()].sort((a, b) => {

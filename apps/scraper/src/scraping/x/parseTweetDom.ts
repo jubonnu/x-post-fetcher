@@ -60,10 +60,29 @@ function normalizeText(s: string): string {
 
 function buildCleanedHtml(article: Element): string {
   const clone = article.cloneNode(true) as Element;
-  clone.querySelectorAll(MEDIA_REMOVE_SELECTORS.join(",")).forEach((el: Element) => el.remove());
-  clone.querySelectorAll('[style*="background-image"]').forEach((el: any) => {
-    el.setAttribute("style", (el.getAttribute("style") ?? "").replace(/background-image[^;]*;?/gi, ""));
-  });
+
+  // メディア・装飾・インタラクティブ要素を除去
+  clone
+    .querySelectorAll([...MEDIA_REMOVE_SELECTORS, "svg", "button", "script", "style"].join(","))
+    .forEach((el: Element) => el.remove());
+
+  // 不要属性を除去（class / style / id / aria-* / on* / tabindex）
+  for (const el of Array.from(clone.querySelectorAll("*")) as Element[]) {
+    const names: string[] = (el as any).getAttributeNames?.() ?? [];
+    for (const name of names) {
+      if (
+        name === "class" ||
+        name === "style" ||
+        name === "id" ||
+        name === "tabindex" ||
+        name.startsWith("aria-") ||
+        name.startsWith("on")
+      ) {
+        el.removeAttribute(name);
+      }
+    }
+  }
+
   return (clone as any).outerHTML;
 }
 
@@ -171,7 +190,10 @@ function parseSsrArticle(article: Element, rawHtml: string, cleanedHtml: string)
   };
 }
 
-/** 本文内リンク（t.co や外部http）を href と表示テキスト付きで収集 */
+/**
+ * 本文内リンクを href と表示テキスト付きで収集。
+ * 優先順: data-expanded-url > data-url > href (t.co)
+ */
 function collectLinks(article: Element): ExternalLink[] {
   const seen = new Set<string>();
   const links: ExternalLink[] = [];
@@ -179,9 +201,15 @@ function collectLinks(article: Element): ExternalLink[] {
     const href = a.getAttribute("href") ?? "";
     if (!/^https?:\/\//i.test(href)) continue;
     if (/^https?:\/\/(x|twitter)\.com\//i.test(href) && /\/status\/|\/photo\//.test(href)) continue; // 自己リンク除外
-    if (seen.has(href)) continue;
-    seen.add(href);
-    links.push({ href, text: ((a as any).textContent ?? "").trim() });
+
+    // 展開済みURL属性があればそちらを優先
+    const expandedUrl = a.getAttribute("data-expanded-url") ?? a.getAttribute("data-url") ?? null;
+    const effectiveHref =
+      expandedUrl && /^https?:\/\//i.test(expandedUrl) ? expandedUrl : href;
+
+    if (seen.has(effectiveHref)) continue;
+    seen.add(effectiveHref);
+    links.push({ href: effectiveHref, text: ((a as any).textContent ?? "").trim() });
   }
   return links;
 }
