@@ -36,6 +36,13 @@
       "when": 1784995521450,
       "tag": "0004_complex_stingray",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785149705844,
+      "tag": "0005_spotty_harpoon",
+      "breakpoints": true
     }
   ]
 }

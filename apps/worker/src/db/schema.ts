@@ -1,6 +1,9 @@
 import { sql } from "drizzle-orm";
 import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
+export type JobType = "resolve_urls" | "analyze_post";
+export type JobStatus = "pending" | "running" | "done" | "failed";
+
 /**
  * source_posts — X から取得した元投稿（情報源）。
  * Phase 1 の対象テーブル。externalPostId に UNIQUE 制約。
@@ -94,6 +97,9 @@ export const lotteries = sqliteTable("lotteries", {
   purchaseStartAt: text("purchase_start_at"),
   purchaseDeadlineAt: text("purchase_deadline_at"),
   applicationUrl: text("application_url"),
+  resolvedApplicationUrl: text("resolved_application_url"),
+  applicationUrlHttpStatus: integer("application_url_http_status"),
+  urlResolvedAt: text("url_resolved_at"),
   officialInformationUrl: text("official_information_url"),
   appDownloadUrl: text("app_download_url"),
   applicationMethod: text("application_method"),
@@ -152,3 +158,32 @@ export const lotteryFieldHistory = sqliteTable("lottery_field_history", {
 });
 
 export type LotteryFieldHistoryRow = typeof lotteryFieldHistory.$inferSelect;
+
+/**
+ * processing_jobs — 非同期・リトライ可能なジョブ管理（Phase 4）。
+ * jobType: 'resolve_urls'（URL 解決）| 'analyze_post'（再解析）
+ * status: pending → running → done / failed（失敗時は attempts < maxAttempts なら pending に戻す）
+ */
+export const processingJobs = sqliteTable("processing_jobs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  jobType: text("job_type").notNull(),
+  status: text("status").notNull().default("pending"),
+  sourcePostId: integer("source_post_id"),
+  lotteryId: integer("lottery_id"),
+  payload: text("payload"),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  nextRetryAt: text("next_retry_at"),
+  lastError: text("last_error"),
+  lockedAt: text("locked_at"),
+  lockedBy: text("locked_by"),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type ProcessingJobRow = typeof processingJobs.$inferSelect;

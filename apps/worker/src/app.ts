@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { CreateDb } from "./db/client.ts";
 import type { AppEnv, Env } from "./env.ts";
 import { registerIngest } from "./routes/ingest.ts";
+import { registerJobs } from "./routes/jobs.ts";
 
 /**
  * Hono アプリを生成する（Workers / Node 両対応）。
@@ -24,6 +25,9 @@ export function createApp(createDb: CreateDb) {
 
   // 内部取込API
   registerIngest(app);
+
+  // 内部ジョブ実行API（Phase 4: URL 解決等）
+  registerJobs(app);
 
   return app;
 }

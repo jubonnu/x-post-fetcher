@@ -10,6 +10,7 @@ import {
 } from "../services/normalize.ts";
 import { matchExistingLottery, type MatchOptions } from "../services/matchExistingLottery.ts";
 import { mergeLotteryData } from "../services/mergeLotteryData.ts";
+import { enqueueJob } from "./processingJobRepository.ts";
 
 /** completenessScore（0-1）: 商品/店舗=必須, 締切/当選/URL=重要 */
 function completeness(l: ExtractedLottery): number {
@@ -163,6 +164,9 @@ export async function syncLotteriesFromAnalysis(
         matchReason: m.reason,
         contributedFields: JSON.stringify(merged.changes.map((c) => c.fieldName)),
       });
+      // URL 解決ジョブをエンキュー（applicationUrl がある場合のみ）
+      const mergedUrl = (merged.updates as Record<string, unknown>).applicationUrl ?? target.applicationUrl;
+      if (mergedUrl) await enqueueJob(db, "resolve_urls", { lotteryId: target.id });
       result.merged++;
     } else {
       const isReview = m.action === "review";
@@ -190,6 +194,8 @@ export async function syncLotteriesFromAnalysis(
         matchReason: m.reason,
         contributedFields: JSON.stringify(CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null)),
       });
+      // URL 解決ジョブをエンキュー（applicationUrl がある場合のみ）
+      if (candidate.applicationUrl) await enqueueJob(db, "resolve_urls", { lotteryId });
       if (isReview) result.review++;
       else result.inserted++;
     }
