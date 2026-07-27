@@ -2,11 +2,12 @@ import { eq } from "drizzle-orm";
 import type { AnalysisInput } from "@x-post/shared";
 import type { Db } from "../db/client.ts";
 import { lotteries, postAnalyses, type PostAnalysisRow } from "../db/schema.ts";
-import { syncLotteriesFromAnalysis, toLotteryRow } from "./lotteryRepository.ts";
+import { syncLotteriesFromAnalysis, toLotteryRow, type LotteryActionResult } from "./lotteryRepository.ts";
 
 export interface PersistAnalysisResult {
   action: "inserted" | "reused" | "failed";
   lotteryCount: number;
+  lotteryResults?: LotteryActionResult[];
 }
 
 /**
@@ -65,5 +66,5 @@ export async function persistAnalysis(
   // Phase 3: 同一抽選マッチングで統合 / 新規登録し、情報源・変更履歴を記録する。
   const candidates = analysis.extractedLotteries.map((l) => toLotteryRow(sourcePostId, l));
   const synced = await syncLotteriesFromAnalysis(db, sourcePostId, candidates);
-  return { action: "inserted", lotteryCount: synced.count };
+  return { action: "inserted", lotteryCount: synced.count, lotteryResults: synced.results };
 }

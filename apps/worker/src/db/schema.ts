@@ -110,6 +110,11 @@ export const lotteries = sqliteTable("lotteries", {
   status: text("status"),
   completenessScore: text("completeness_score"),
   verificationStatus: text("verification_status"),
+  // Phase 5: 承認/却下
+  approvedBy: text("approved_by"),
+  approvedAt: text("approved_at"),
+  rejectedReason: text("rejected_reason"),
+  rejectedAt: text("rejected_at"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),

@@ -3,6 +3,8 @@ import type { CreateDb } from "./db/client.ts";
 import type { AppEnv, Env } from "./env.ts";
 import { registerIngest } from "./routes/ingest.ts";
 import { registerJobs } from "./routes/jobs.ts";
+import { registerLotteries } from "./routes/lotteries.ts";
+import { registerReview } from "./routes/review.ts";
 
 /**
  * Hono アプリを生成する（Workers / Node 両対応）。
@@ -21,13 +23,19 @@ export function createApp(createDb: CreateDb) {
   });
 
   // ヘルスチェック（公開）
-  app.get("/", (c) => c.json({ ok: true, service: "x-post ingest worker", phase: 1 }));
+  app.get("/", (c) => c.json({ ok: true, service: "x-post ingest worker", phase: 5 }));
+
+  // 公開 GET API（Phase 5）
+  registerLotteries(app);
 
   // 内部取込API
   registerIngest(app);
 
-  // 内部ジョブ実行API（Phase 4: URL 解決等）
+  // 内部ジョブ実行API（Phase 4）
   registerJobs(app);
+
+  // 内部管理API（Phase 5: needs_review 管理、再解析）
+  registerReview(app);
 
   return app;
 }

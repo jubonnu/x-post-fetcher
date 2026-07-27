@@ -1,7 +1,14 @@
-import { eq, inArray } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray } from "drizzle-orm";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db } from "../db/client.ts";
-import { lotteries, lotteryFieldHistory, lotterySources, type LotteryRow } from "../db/schema.ts";
+import {
+  lotteries,
+  lotteryFieldHistory,
+  lotterySources,
+  type LotteryRow,
+  type LotterySourceRow,
+  type LotteryFieldHistoryRow,
+} from "../db/schema.ts";
 import {
   NORMALIZER_VERSION,
   normalizeProductName,
@@ -66,11 +73,19 @@ export function toLotteryRow(sourcePostId: number, l: ExtractedLottery) {
   };
 }
 
+export interface LotteryActionResult {
+  lotteryId: number;
+  matchAction: string;
+  matchScore: number;
+  changedFields: string[];
+}
+
 export interface SyncLotteriesResult {
   count: number;
   merged: number;
   inserted: number;
   review: number;
+  results: LotteryActionResult[];
 }
 
 /** 締切ブロック日数を環境変数から取得（既定は matchExistingLottery 側の 7 日）。 */
@@ -130,7 +145,7 @@ export async function syncLotteriesFromAnalysis(
 ): Promise<SyncLotteriesResult> {
   await unlinkSourceContributions(db, sourcePostId);
 
-  const result: SyncLotteriesResult = { count: 0, merged: 0, inserted: 0, review: 0 };
+  const result: SyncLotteriesResult = { count: 0, merged: 0, inserted: 0, review: 0, results: [] };
   const opts = matchOpts();
 
   for (const candidate of candidates) {
@@ -167,6 +182,12 @@ export async function syncLotteriesFromAnalysis(
       // URL 解決ジョブをエンキュー（applicationUrl がある場合のみ）
       const mergedUrl = (merged.updates as Record<string, unknown>).applicationUrl ?? target.applicationUrl;
       if (mergedUrl) await enqueueJob(db, "resolve_urls", { lotteryId: target.id });
+      result.results.push({
+        lotteryId: target.id,
+        matchAction: "merge",
+        matchScore: m.score,
+        changedFields: merged.changes.map((c) => c.fieldName),
+      });
       result.merged++;
     } else {
       const isReview = m.action === "review";
@@ -196,6 +217,12 @@ export async function syncLotteriesFromAnalysis(
       });
       // URL 解決ジョブをエンキュー（applicationUrl がある場合のみ）
       if (candidate.applicationUrl) await enqueueJob(db, "resolve_urls", { lotteryId });
+      result.results.push({
+        lotteryId,
+        matchAction: m.action,
+        matchScore: m.score,
+        changedFields: CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null),
+      });
       if (isReview) result.review++;
       else result.inserted++;
     }
@@ -203,4 +230,65 @@ export async function syncLotteriesFromAnalysis(
   }
 
   return result;
+}
+
+// ---- Phase 5: 公開/管理 API 用クエリ ----
+
+export interface ListLotteriesOptions {
+  cardType?: string;
+  verificationStatus?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ListLotteriesResult {
+  lotteries: LotteryRow[];
+  total: number;
+}
+
+/** 公開 GET /lotteries 用の一覧取得（ページネーション + フィルタ）。 */
+export async function listLotteries(db: Db, opts: ListLotteriesOptions = {}): Promise<ListLotteriesResult> {
+  const { cardType, verificationStatus, limit = 20, offset = 0 } = opts;
+
+  const conditions = [
+    ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
+    ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : []),
+  ];
+  const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select()
+      .from(lotteries)
+      .where(where)
+      .orderBy(desc(lotteries.createdAt))
+      .limit(Math.min(limit, 100))
+      .offset(offset),
+    db.select({ total: count() }).from(lotteries).where(where),
+  ]);
+
+  return { lotteries: rows, total };
+}
+
+export interface LotteryWithDetails {
+  lottery: LotteryRow;
+  sources: LotterySourceRow[];
+  fieldHistory: LotteryFieldHistoryRow[];
+}
+
+/** 抽選の詳細（lottery_sources + lottery_field_history 付き）を取得する。 */
+export async function getLotteryWithDetails(db: Db, id: number): Promise<LotteryWithDetails | null> {
+  const rows = await db.select().from(lotteries).where(eq(lotteries.id, id));
+  if (rows.length === 0) return null;
+
+  const [sources, fieldHistory] = await Promise.all([
+    db.select().from(lotterySources).where(eq(lotterySources.lotteryId, id)).orderBy(asc(lotterySources.createdAt)),
+    db
+      .select()
+      .from(lotteryFieldHistory)
+      .where(eq(lotteryFieldHistory.lotteryId, id))
+      .orderBy(asc(lotteryFieldHistory.createdAt)),
+  ]);
+
+  return { lottery: rows[0], sources, fieldHistory };
 }

@@ -71,10 +71,33 @@ async function main(): Promise<void> {
       const json: any = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
         counts.failed++;
-        console.error(`[scrape] tweetId=${p.tweetId} 失敗 status=${res.status} ${JSON.stringify(json)}`);
+        // 構造化ログ（エラー）
+        console.error(
+          JSON.stringify({
+            batchId,
+            tweetId: p.tweetId,
+            action: "failed",
+            httpStatus: res.status,
+            error: json.error ?? "unknown",
+          })
+        );
       } else {
         counts[json.action] = (counts[json.action] ?? 0) + 1;
-        console.log(`[scrape] tweetId=${p.tweetId} → ${json.action} (sourcePostId=${json.sourcePostId})`);
+        // 構造化ログ（正常）: rawHtml / cleanedHtml は含まない
+        console.log(
+          JSON.stringify({
+            batchId,
+            tweetId: p.tweetId,
+            sourcePostId: json.sourcePostId,
+            action: json.action,
+            postType: analysis?.postType ?? null,
+            isLotteryInformation: analysis?.isLotteryInformation ?? null,
+            analysisStatus: analysis?.analysisStatus ?? null,
+            extractedLotteryCount: analysis?.extractedLotteries?.length ?? 0,
+            analysisAction: json.analysis?.action ?? null,
+            lotteryResults: json.analysis?.lotteryResults ?? [],
+          })
+        );
       }
     } catch (e) {
       counts.failed++;

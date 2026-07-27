@@ -43,6 +43,13 @@
       "when": 1785149705844,
       "tag": "0005_spotty_harpoon",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785150013424,
+      "tag": "0006_vengeful_xavin",
+      "breakpoints": true
     }
   ]
 }

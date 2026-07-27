@@ -42,16 +42,31 @@ export function registerIngest(app: Hono<AppEnv>): void {
     }
 
     // --- analysis 永続化（あれば）。解析失敗でも sourcePost は保持済み ---
-    let analysis: { action: string; lotteryCount: number } | undefined;
+    let analysis: { action: string; lotteryCount: number; lotteryResults?: unknown[] } | undefined;
     if (parsed.data.analysis) {
       try {
         analysis = await persistAnalysis(db, result.sourcePostId, parsed.data.analysis);
       } catch (e) {
-        // 同一判定/統合の失敗は元投稿＋解析を保持し、解析だけ failed 扱いにする
         analysis = { action: "failed", lotteryCount: 0 };
         console.error(`[ingest] analysis 永続化失敗: ${e instanceof Error ? e.message : e}`);
       }
     }
+
+    // 構造化ログ（rawHtml / cleanedHtml は出力しない）
+    console.log(
+      JSON.stringify({
+        batchId: parsed.data.batchId ?? null,
+        sourcePostId: result.sourcePostId,
+        externalPostId: result.externalPostId,
+        action: result.action,
+        postType: parsed.data.analysis?.postType ?? null,
+        isLotteryInformation: parsed.data.analysis?.isLotteryInformation ?? null,
+        analysisStatus: parsed.data.analysis?.analysisStatus ?? null,
+        extractedLotteryCount: parsed.data.analysis?.extractedLotteries?.length ?? 0,
+        analysisAction: analysis?.action ?? null,
+        lotteryResults: analysis?.lotteryResults ?? [],
+      })
+    );
 
     return c.json({ ok: true, ...result, ...(analysis ? { analysis } : {}) });
   });
