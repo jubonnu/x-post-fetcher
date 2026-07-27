@@ -114,3 +114,41 @@ export const lotteries = sqliteTable("lotteries", {
 
 export type LotteryRow = typeof lotteries.$inferSelect;
 export type LotteryInsert = typeof lotteries.$inferInsert;
+
+/**
+ * lottery_sources — 1つの抽選に寄与した情報源（source_posts）を記録（Phase 3）。
+ * 同一抽選マッチングで複数投稿が同じ抽選に統合された場合、どの投稿が寄与したかを保持する。
+ */
+export const lotterySources = sqliteTable("lottery_sources", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  lotteryId: integer("lottery_id").notNull(),
+  sourcePostId: integer("source_post_id").notNull(),
+  matchAction: text("match_action"), // new / merge / review
+  matchScore: text("match_score"),
+  matchReason: text("match_reason"),
+  contributedFields: text("contributed_fields"), // JSON: 反映したフィールド名の配列
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type LotterySourceRow = typeof lotterySources.$inferSelect;
+
+/**
+ * lottery_field_history — 抽選フィールドの変更履歴（Phase 3）。
+ * created（新規）/ updated（空欄補完・上書き）/ conflicting（競合で不採用）を記録する。
+ */
+export const lotteryFieldHistory = sqliteTable("lottery_field_history", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  lotteryId: integer("lottery_id").notNull(),
+  sourcePostId: integer("source_post_id"),
+  fieldName: text("field_name").notNull(),
+  oldValue: text("old_value"),
+  newValue: text("new_value"),
+  changeType: text("change_type").notNull(), // created / updated / conflicting
+  createdAt: text("created_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type LotteryFieldHistoryRow = typeof lotteryFieldHistory.$inferSelect;

@@ -54,6 +54,15 @@ function extractProductName(body: string): string | null {
   return m ? m[1] : null;
 }
 
+/** まとめ投稿のヘッダ商品名（「」内 or 先頭行から「まとめ/全抽選/抽選」以降を除去） */
+function extractHeaderProduct(body: string): string | null {
+  const quoted = extractProductName(body);
+  if (quoted) return quoted;
+  const firstLine = (body.split(/\n+/)[0] ?? "").trim();
+  const stripped = firstLine.replace(/(全抽選まとめ|抽選まとめ|まとめ|全抽選|抽選).*$/, "").trim();
+  return stripped.length >= 2 ? stripped : null;
+}
+
 /**
  * 1投稿から「単一の」抽選情報を抽出する（Phase 2）。
  * 複数店舗・複数商品の分割は Phase 3 の担当。ここでは Raw 値のまま返す（正規化は Worker）。
@@ -107,4 +116,75 @@ export function extractSingleLottery(
     price: priceLine && /円/.test(priceLine) ? priceLine : null,
     notes: null,
   };
+}
+
+/**
+ * 1投稿を「複数の」抽選へ分割する（Phase 3）。
+ *  - 店舗マーカー行（✅/✔/・ + 店舗 + 締切）が2つ以上 → まとめ投稿として店舗ごとに分割
+ *    （商品はヘッダ商品、締切は各行のインライン日付）。
+ *  - マーカーが無くても 商品「」が2つ以上 + 共通店舗が取れる → 商品ごとに分割。
+ *  - 確実に分割できなければ null（呼び出し側は needs_review へ）。
+ * 日時はルール(resolveDate)で確定し、LLM は使用しない。
+ */
+export function splitLotteries(
+  bodyText: string,
+  postPublishedAt: string | null,
+  urls: ClassifiedUrl[]
+): ExtractedLottery[] | null {
+  const body = bodyText ?? "";
+  const lines = body.split(/\n+/);
+  const markerLines = lines.filter((l) => /^\s*[✅✔・]/.test(l));
+  const headerProduct = extractHeaderProduct(body);
+
+  const cardType = detectCardType(body);
+  const resultAnnouncement = fieldDate(body, ["当選発表", "当選者発表", "抽選結果"], postPublishedAt);
+  const applicationUrl = firstUrlOfType(urls, "application");
+  const officialInformationUrl = firstUrlOfType(urls, "official_information");
+  const appDownloadUrl = firstUrlOfType(urls, "app_download");
+
+  const make = (product: string | null, store: string | null, applicationEnd: ResolvedDate): ExtractedLottery => ({
+    cardType,
+    productNameRaw: product,
+    storeNameRaw: store,
+    storeBranchRaw: null,
+    region: null,
+    applicationStart: emptyResolved(),
+    applicationEnd,
+    resultAnnouncement,
+    purchaseStart: emptyResolved(),
+    purchaseDeadline: emptyResolved(),
+    confirmedOpenAt: null,
+    applicationUrl,
+    officialInformationUrl,
+    appDownloadUrl,
+    applicationMethod: null,
+    eligibilityConditions: null,
+    pickupMethod: null,
+    paymentMethod: null,
+    price: null,
+    notes: null,
+  });
+
+  // (1) 店舗マーカー行が2つ以上 → 店舗ごとに分割
+  if (markerLines.length >= 2) {
+    return markerLines.map((line) => {
+      const rest = line.replace(/^\s*[✅✔・]\s*/, "");
+      const m = rest.match(/^([^\d]+?)\s*([\d/].*)?$/);
+      const store = (m ? m[1] : rest).trim() || null;
+      const dateText = m && m[2] ? m[2] : null;
+      const applicationEnd = dateText ? resolveDate(dateText, postPublishedAt) : emptyResolved();
+      return make(headerProduct, store, applicationEnd);
+    });
+  }
+
+  // (2) 商品「」が2つ以上 + 共通店舗 → 商品ごとに分割
+  const products = [...body.matchAll(/[「『]([^」』]{1,60})[」』]/g)].map((x) => x[1]);
+  const uniqueProducts = [...new Set(products)];
+  const store = extractStoreName(body);
+  if (uniqueProducts.length >= 2 && store) {
+    const applicationEnd = fieldDate(body, ["応募期間", "締切", "〆", "まで"], postPublishedAt);
+    return uniqueProducts.map((p) => make(p, store, applicationEnd));
+  }
+
+  return null;
 }

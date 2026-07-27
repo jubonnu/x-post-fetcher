@@ -111,11 +111,18 @@ describe("classifyPostUrls / analyzePost", () => {
     expect(analysis.inputContentHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("複数店舗まとめはルールでは分割不能 → needs_review でルール単一抽出", async () => {
+  it("複数店舗まとめは Phase3 で店舗ごとに分割 → success で複数抽出", async () => {
     const body =
       "MEGAドリームex 全抽選まとめ\n✅ドラスタ 8/11 23:59〆\n✅ホビステ 8/12 23:59〆\n応募期間 当選発表 8/15";
     const analysis = await analyzePost(makePost(body));
-    expect(analysis.analysisStatus).toBe("needs_review");
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(2);
+    const stores = analysis.extractedLotteries.map((l) => l.storeNameRaw);
+    expect(stores).toEqual(["ドラスタ", "ホビステ"]);
+    // 各件はヘッダ商品を共有し、締切はそれぞれの行から
+    expect(analysis.extractedLotteries[0].productNameRaw).toBe("MEGAドリームex");
+    expect(analysis.extractedLotteries[0].applicationEnd.date).toBe("2026-08-11");
+    expect(analysis.extractedLotteries[1].applicationEnd.date).toBe("2026-08-12");
   });
 });
 

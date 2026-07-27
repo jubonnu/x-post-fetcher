@@ -2,10 +2,10 @@ import { computeContentHash, type AnalysisInput } from "@x-post/shared";
 import type { RawPost } from "../scraping/x/parseTweetDom.ts";
 import { classifyPost } from "./classifyPost.ts";
 import { classifyPostUrls } from "./classifyUrls.ts";
-import { extractSingleLottery } from "./extractLotteryData.ts";
+import { extractSingleLottery, splitLotteries } from "./extractLotteryData.ts";
 
-/** ルールパーサのバージョン（記録用。再解析判定は Worker 側で contentHash のみを見る） */
-export const PARSER_VERSION = "phase2-rules-1";
+/** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
+export const PARSER_VERSION = "phase3-rules-1";
 
 /**
  * 複数店舗・複数商品・複数セクションを含む「複雑/曖昧」な投稿かを素朴に判定。
@@ -51,8 +51,13 @@ export async function analyzePost(post: RawPost): Promise<AnalysisInput> {
 
   const single = extractSingleLottery(post.bodyText, post.publishedAt, urls);
 
-  // 複雑/曖昧（複数店舗・複数商品・複数セクション）→ ルール単一抽出 + 要確認（分割は Phase 3）
+  // 複雑/曖昧（複数店舗・複数商品）→ ルールで分割を試みる（Phase 3）。
+  // 確実に分割でき（各件に商品と店舗が揃う）→ success。分割できなければ単一 + needs_review。
   if (assessComplexity(post.bodyText)) {
+    const split = splitLotteries(post.bodyText, post.publishedAt, urls);
+    if (split && split.length >= 2 && split.every((l) => l.productNameRaw && l.storeNameRaw)) {
+      return { ...base, extractedLotteries: split, analysisStatus: "success" };
+    }
     return { ...base, extractedLotteries: [single], analysisStatus: "needs_review" };
   }
 

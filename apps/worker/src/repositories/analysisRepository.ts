@@ -1,13 +1,8 @@
 import { eq } from "drizzle-orm";
-import type { AnalysisInput, ExtractedLottery } from "@x-post/shared";
+import type { AnalysisInput } from "@x-post/shared";
 import type { Db } from "../db/client.ts";
 import { lotteries, postAnalyses, type PostAnalysisRow } from "../db/schema.ts";
-import {
-  NORMALIZER_VERSION,
-  normalizeProductName,
-  normalizeStoreBranch,
-  normalizeStoreName,
-} from "../services/normalize.ts";
+import { syncLotteriesFromAnalysis, toLotteryRow } from "./lotteryRepository.ts";
 
 export interface PersistAnalysisResult {
   action: "inserted" | "reused" | "failed";
@@ -30,60 +25,7 @@ export function decideAnalysisAction(priors: PostAnalysisRow[], incoming: Analys
   return exists ? "reused" : "inserted";
 }
 
-/** completenessScore（0-1）: 商品/店舗=必須, 締切/当選/URL=重要 */
-function completeness(l: ExtractedLottery): number {
-  let s = 0;
-  if (l.productNameRaw) s += 0.25;
-  if (l.storeNameRaw) s += 0.25;
-  if (l.applicationEnd.at || l.applicationEnd.date) s += 0.2;
-  if (l.resultAnnouncement.at || l.resultAnnouncement.date) s += 0.15;
-  if (l.applicationUrl) s += 0.15;
-  return Number(s.toFixed(2));
-}
-
-/** 日時項目に conflicting があれば verificationStatus=conflicting */
-function verification(l: ExtractedLottery): string {
-  const fields = [l.applicationStart, l.applicationEnd, l.resultAnnouncement, l.purchaseStart, l.purchaseDeadline];
-  return fields.some((f) => f.status === "conflicting") ? "conflicting" : "extracted";
-}
-
-function toLotteryRow(sourcePostId: number, l: ExtractedLottery) {
-  return {
-    sourcePostId,
-    productNameRaw: l.productNameRaw,
-    normalizedProductName: normalizeProductName(l.productNameRaw),
-    cardType: l.cardType,
-    storeNameRaw: l.storeNameRaw,
-    normalizedStoreName: normalizeStoreName(l.storeNameRaw),
-    storeBranchRaw: l.storeBranchRaw,
-    normalizedStoreBranch: normalizeStoreBranch(l.storeBranchRaw),
-    region: l.region,
-    normalizerVersion: NORMALIZER_VERSION,
-    applicationStartAt: l.applicationStart.at ?? l.confirmedOpenAt,
-    confirmedOpenAt: l.confirmedOpenAt,
-    applicationEndAt: l.applicationEnd.at,
-    applicationEndDate: l.applicationEnd.date,
-    applicationEndPrecision: l.applicationEnd.precision,
-    resultAnnouncementAt: l.resultAnnouncement.at,
-    resultAnnouncementDate: l.resultAnnouncement.date,
-    resultAnnouncementPrecision: l.resultAnnouncement.precision,
-    purchaseStartAt: l.purchaseStart.at,
-    purchaseDeadlineAt: l.purchaseDeadline.at ?? l.purchaseDeadline.date,
-    applicationUrl: l.applicationUrl,
-    officialInformationUrl: l.officialInformationUrl,
-    appDownloadUrl: l.appDownloadUrl,
-    applicationMethod: l.applicationMethod,
-    eligibilityConditions: l.eligibilityConditions,
-    pickupMethod: l.pickupMethod,
-    paymentMethod: l.paymentMethod,
-    price: l.price,
-    status: "open",
-    completenessScore: String(completeness(l)),
-    verificationStatus: verification(l),
-  };
-}
-
-async function currentLotteryCount(db: Db, sourcePostId: number): Promise<number> {
+async function priorSourceLotteryCount(db: Db, sourcePostId: number): Promise<number> {
   const existing = await db.select().from(lotteries).where(eq(lotteries.sourcePostId, sourcePostId));
   return existing.length;
 }
@@ -91,8 +33,8 @@ async function currentLotteryCount(db: Db, sourcePostId: number): Promise<number
 /**
  * 解析結果を永続化する。
  *  - reused: inputContentHash と parserVersion が両方一致する解析が既にあれば post_analyses・lotteries を変更しない。
- *  - inserted: contentHash が変わった / parserVersion が上がった / 初回 → post_analyses を追加し、当該 sourcePost の
- *    lotteries を作り直す（Phase 2 は単純 insert。同一判定・統合は Phase 3）。
+ *  - inserted: contentHash が変わった / parserVersion が上がった / 初回 → post_analyses を追加し、抽選候補を
+ *    **同一抽選マッチング（match → merge / insert）**で永続化する（Phase 3）。統合・履歴・情報源は Worker 責務。
  */
 export async function persistAnalysis(
   db: Db,
@@ -102,7 +44,7 @@ export async function persistAnalysis(
   const priors = await db.select().from(postAnalyses).where(eq(postAnalyses.sourcePostId, sourcePostId));
 
   if (decideAnalysisAction(priors, analysis) === "reused") {
-    return { action: "reused", lotteryCount: await currentLotteryCount(db, sourcePostId) };
+    return { action: "reused", lotteryCount: await priorSourceLotteryCount(db, sourcePostId) };
   }
 
   const now = new Date().toISOString();
@@ -120,12 +62,8 @@ export async function persistAnalysis(
     errorMessage: analysis.errorMessage ?? null,
   });
 
-  // 再解析時は当該 sourcePost の抽選を作り直す（Phase 3 で統合方式に置き換える）
-  await db.delete(lotteries).where(eq(lotteries.sourcePostId, sourcePostId));
-  let count = 0;
-  for (const l of analysis.extractedLotteries) {
-    await db.insert(lotteries).values(toLotteryRow(sourcePostId, l));
-    count++;
-  }
-  return { action: "inserted", lotteryCount: count };
+  // Phase 3: 同一抽選マッチングで統合 / 新規登録し、情報源・変更履歴を記録する。
+  const candidates = analysis.extractedLotteries.map((l) => toLotteryRow(sourcePostId, l));
+  const synced = await syncLotteriesFromAnalysis(db, sourcePostId, candidates);
+  return { action: "inserted", lotteryCount: synced.count };
 }

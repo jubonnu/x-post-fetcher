@@ -29,6 +29,13 @@
       "when": 1784907127309,
       "tag": "0003_next_serpent_society",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1784995521450,
+      "tag": "0004_complex_stingray",
+      "breakpoints": true
     }
   ]
 }
