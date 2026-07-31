@@ -1,9 +1,22 @@
 import { Hono } from "hono";
 import type { CreateDb } from "./db/client.ts";
 import type { AppEnv, Env } from "./env.ts";
+import { requireAuthConfigured } from "./auth/middleware.ts";
+import { publicApiCors } from "./publicCors.ts";
+import { registerAppleRevocationRetry } from "./routes/appleRevocationRetry.ts";
+import { registerAuth } from "./routes/auth.ts";
+import { registerBillingWebhook } from "./routes/billingWebhook.ts";
 import { registerIngest } from "./routes/ingest.ts";
 import { registerJobs } from "./routes/jobs.ts";
 import { registerLotteries } from "./routes/lotteries.ts";
+import { registerMe } from "./routes/me.ts";
+import { registerMeChecklists } from "./routes/meChecklists.ts";
+import { registerMeEntitlements } from "./routes/meEntitlements.ts";
+import { registerMeFavorites } from "./routes/meFavorites.ts";
+import { registerMeFollowedProducts } from "./routes/meFollowedProducts.ts";
+import { registerMeLotteries } from "./routes/meLotteries.ts";
+import { registerMeNotificationPreferences } from "./routes/meNotificationPreferences.ts";
+import { registerMeSyncBootstrap } from "./routes/meSyncBootstrap.ts";
 import { registerReview } from "./routes/review.ts";
 
 /**
@@ -19,11 +32,16 @@ export function createApp(createDb: CreateDb) {
     const env = { ...nodeEnv, ...((c.env as Record<string, unknown>) ?? {}) } as Env;
     c.set("env", env);
     c.set("db", createDb(env));
+    c.set("requestId", crypto.randomUUID());
     await next();
   });
 
   // ヘルスチェック（公開）
   app.get("/", (c) => c.json({ ok: true, service: "x-post ingest worker", phase: 5 }));
+
+  // 公開GET API（/lotteries系）のみCORSを許可する。/ingest・/internal/* には適用しない。
+  app.use("/lotteries", publicApiCors());
+  app.use("/lotteries/*", publicApiCors());
 
   // 公開 GET API（Phase 5）
   registerLotteries(app);
@@ -36,6 +54,33 @@ export function createApp(createDb: CreateDb) {
 
   // 内部管理API（Phase 5: needs_review 管理、再解析）
   registerReview(app);
+
+  // Apple側トークン失効の再試行（内部API、Cron Triggerからも同じロジックを呼ぶ。Mobile-G2A-Hardening）
+  registerAppleRevocationRetry(app);
+
+  // RevenueCat Webhook（Mobile-G4）。CardHubのJWT認証(`requireAuth`)は使わず、RevenueCat専用の
+  // 認証で保護するため、`requireAuthConfigured`より前・独立した経路として登録する。
+  registerBillingWebhook(app);
+
+  // 認証・アカウントAPI（Mobile-G2A）。
+  // 認証設定が不正/未設定の場合はここで503 AUTH_NOT_CONFIGUREDにし、以降のハンドラへ進ませない。
+  // /lotteries・/ingest・/internal/* はこのミドルウェアを経由しないため、認証設定の状態に関わらず稼働を維持する。
+  app.use("/auth/*", requireAuthConfigured);
+  app.use("/me", requireAuthConfigured);
+  app.use("/me/*", requireAuthConfigured);
+  registerAuth(app);
+  registerMe(app);
+
+  // ユーザーデータ同期基盤（Mobile-G2B-2〜G2B-5）
+  registerMeLotteries(app);
+  registerMeFavorites(app);
+  registerMeFollowedProducts(app);
+  registerMeChecklists(app);
+  registerMeNotificationPreferences(app);
+  registerMeSyncBootstrap(app);
+
+  // RevenueCat premium entitlements（Mobile-G4）
+  registerMeEntitlements(app);
 
   return app;
 }
