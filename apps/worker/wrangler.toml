@@ -8,5 +8,26 @@ compatibility_flags = ["nodejs_compat"]
 #   TURSO_DATABASE_URL  … libsql://<db>.turso.io
 #   TURSO_AUTH_TOKEN    … Turso のトークン
 #
+# --- 認証（Mobile-G2A）。本番では下記すべてが必須（未設定・プレースホルダー値は
+#     起動時ではなく認証ルートへのリクエスト時に503 AUTH_NOT_CONFIGUREDでfail-closedになる）---
+#   ENVIRONMENT                       … 'development' | 'test' | 'preview' | 'production' のいずれか必須
+#   APPLE_CLIENT_ID                   … Sign in with Apple のaudience（Bundle Identifier）
+#   JWT_SIGNING_KEY_CURRENT_KID       … Access Token署名鍵の世代タグ（例: "v1"）
+#   JWT_SIGNING_KEY_CURRENT_SECRET    … Access Token署名鍵（HS256）
+#   JWT_SIGNING_KEY_PREVIOUS_KID      … （鍵ローテーション中のみ）直前世代の世代タグ
+#   JWT_SIGNING_KEY_PREVIOUS_SECRET   … （鍵ローテーション中のみ）直前世代の署名鍵
+#   ACCOUNT_DELETION_GRACE_DAYS       … アカウント削除の猶予日数（本番では必須、正式日数は未確定）
+#
+# --- Apple authorizationCode交換・トークン失効（Mobile-G2A-Hardening、任意機能）---
+#     4つとも未設定ならこの機能は無効化される（ログイン・アカウント削除自体は継続する）。
+#     正式な.p8鍵が発行されるまでは本番でも未設定のままでよい。
+#   APPLE_TEAM_ID                          … Apple Developer Team ID
+#   APPLE_KEY_ID                           … Sign in with Apple用秘密鍵のKey ID
+#   APPLE_PRIVATE_KEY                      … .p8ファイルの中身（PEM形式）。リポジトリへ絶対に含めない
+#   APPLE_TOKEN_ENCRYPTION_KEY             … Apple Refresh Token暗号化鍵（Base64、32byte/AES-256-GCM）
+#   APPLE_TOKEN_ENCRYPTION_KEY_VERSION     … 上記鍵の世代タグ（未設定時 'v1'）
+#   APPLE_TOKEN_ENCRYPTION_KEY_PREVIOUS        … （鍵ローテーション中のみ）直前世代の暗号鍵
+#   APPLE_TOKEN_ENCRYPTION_KEY_PREVIOUS_VERSION … （鍵ローテーション中のみ）直前世代の世代タグ
+#
 # ※ Workers 本番では db/client.ts の @libsql/client を @libsql/client/web へ切替が必要。
 #   （ローカル検証は `npm run worker:dev` の Node サーバーで行う）
