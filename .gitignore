@@ -14,3 +14,7 @@ local.db
 # env
 .env
 .env.local
+
+# Apple秘密鍵（Sign in with Apple / token exchange用）。原則リポジトリ外で管理する。
+*.p8
+AuthKey_*.p8
