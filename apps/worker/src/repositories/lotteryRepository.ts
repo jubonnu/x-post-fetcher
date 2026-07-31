@@ -1,6 +1,6 @@
 import { and, asc, count, desc, eq, inArray, ne } from "drizzle-orm";
 import type { ExtractedLottery } from "@x-post/shared";
-import type { Db } from "../db/client.ts";
+import type { Db, DbOrTx } from "../db/client.ts";
 import {
   lotteries,
   lotteryFieldHistory,
@@ -297,7 +297,7 @@ export interface ListLotteriesResult {
 /** 公開 GET /lotteries 用の一覧取得（ページネーション + フィルタ）。
  * デフォルトで rejected + orphaned/archived を除外する。
  */
-export async function listLotteries(db: Db, opts: ListLotteriesOptions = {}): Promise<ListLotteriesResult> {
+export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions = {}): Promise<ListLotteriesResult> {
   const { cardType, verificationStatus, limit = 20, offset = 0 } = opts;
 
   const conditions = [
@@ -331,8 +331,14 @@ export interface LotteryWithDetails {
   fieldHistory: LotteryFieldHistoryRow[];
 }
 
+/** 指定したlotteryIdが存在するか（Mobile-G2B-2: /me/lotteries系の所有者データ登録前チェック用）。 */
+export async function lotteryExists(db: DbOrTx, lotteryId: number): Promise<boolean> {
+  const rows = await db.select({ id: lotteries.id }).from(lotteries).where(eq(lotteries.id, lotteryId));
+  return rows.length > 0;
+}
+
 /** 抽選の詳細（lottery_sources + lottery_field_history 付き）を取得する。 */
-export async function getLotteryWithDetails(db: Db, id: number): Promise<LotteryWithDetails | null> {
+export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<LotteryWithDetails | null> {
   const rows = await db.select().from(lotteries).where(eq(lotteries.id, id));
   if (rows.length === 0) return null;
 
