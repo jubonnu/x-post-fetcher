@@ -1,4 +1,5 @@
-import { and, asc, count, desc, eq, inArray, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, inArray, ne, sql, type SQL } from "drizzle-orm";
+import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db, DbOrTx } from "../db/client.ts";
 import {
@@ -9,6 +10,7 @@ import {
   type LotterySourceRow,
   type LotteryFieldHistoryRow,
 } from "../db/schema.ts";
+import { encodeLotteryListCursor, type LotteryListCursor } from "../services/lotteryListCursor.ts";
 import {
   NORMALIZER_VERSION,
   normalizeProductName,
@@ -282,28 +284,176 @@ export async function syncLotteriesFromAnalysis(
 
 // ---- Phase 5: 公開/管理 API 用クエリ ----
 
+/**
+ * 日付のみ（application_end_date / result_announcement_date）の値を、JSTの日付境界
+ * （その日の23:59:59.999 JSTまで受付中、翌日0:00:00 JSTからended）として解釈するためのオフセット。
+ * UTC 0時（＝日付のみの値のunixepoch()）から起算して、この秒数を足すとJSTでの翌日0時になる
+ * （Asia/TokyoはDSTが無く常にUTC+9のため、24-9=15時間固定）。
+ *
+ * CardHubモバイル側 `apps/mobile/utils/time.ts` の `normalizeDeadline` と同一のルールであり、
+ * 両者は必ず同期させること（どちらかだけを変更すると、一覧の並び順・ステータス判定が
+ * サーバー/クライアントでズレる）。ズレは `tests/lotteries.test.ts` の境界値テストで検知できる。
+ */
+const JST_DATE_ONLY_END_OF_DAY_OFFSET_SECONDS = (24 - 9) * 60 * 60; // 54000
+
+/**
+ * application_end_at（あれば優先）/ application_end_date（日付のみ）から、
+ * 「受付終了時刻」をUNIXエポック秒で算出するSQL式。at値が無く日付のみの場合、
+ * 上記のJST日付境界オフセットを加算する。両方無ければNULL（＝日時未設定）。
+ */
+function endAtEpochExpr(atCol: AnySQLiteColumn, dateCol: AnySQLiteColumn): SQL<number | null> {
+  return sql<number | null>`CASE
+    WHEN ${atCol} IS NOT NULL THEN unixepoch(${atCol})
+    WHEN ${dateCol} IS NOT NULL THEN unixepoch(${dateCol}) + ${JST_DATE_ONLY_END_OF_DAY_OFFSET_SECONDS}
+    ELSE NULL
+  END`;
+}
+
 export interface ListLotteriesOptions {
+  cardType?: string;
+  verificationStatus?: string;
+  limit?: number;
+  /** キーセットページネーションの開始位置。null/undefinedなら先頭ページ。 */
+  cursor?: LotteryListCursor | null;
+  /**
+   * ステータス分類（受付中/結果待ち/終了済み）を固定する基準時刻（ISO8601）。
+   * 保証するのは「時間経過によるステータス分類がページをまたいで変わらないこと」のみで、
+   * データの追加・更新・削除に対する完全なスナップショットは保証しない
+   * （ページ取得の合間に新規/更新された抽選は、次ページの結果に反映されうる）。
+   */
+  asOf: string;
+}
+
+export interface ListLotteriesResult {
+  lotteries: LotteryRow[];
+  total: number;
+  /** 次ページが無い場合はnull。 */
+  nextCursor: string | null;
+}
+
+/** 公開 GET /lotteries 用の一覧取得（キーセットページネーション + フィルタ）。
+ * デフォルトで rejected + orphaned/archived を除外する。
+ *
+ * 並び順は 受付中 → 結果待ち → 終了済み → 日時未設定 の4段階（priority 0〜3）。
+ * 同一priority内は 受付中=締切昇順 / 結果待ち=発表日昇順 / 終了済み=終了日時降順
+ * （sortKeyの符号を反転して表現し、ORDER BYはpriority/sortKeyともASC統一にする）。
+ * 日時未設定はsortKey=0固定で、id昇順のみで安定的に順序付けする
+ * （アプリ側 `utils/publicLotteryDisplay.ts` の取得順維持とは異なるが、サーバーの
+ * キーセットページネーションは全行に厳密な全順序が必要なため、この点のみ意図的に簡略化する）。
+ *
+ * priority/sortKeyはCTE（`prioritized`）で一度だけ算出し、カーソル条件・ORDER BYの両方が
+ * その列を名前で参照する（CASE式を複数箇所に重複させない）。
+ */
+export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions): Promise<ListLotteriesResult> {
+  const { cardType, verificationStatus, cursor = null, asOf } = opts;
+  const limit = Math.min(Math.max(Number.isFinite(opts.limit) ? (opts.limit as number) : 20, 1), 100);
+  const nowEpoch = Math.floor(new Date(asOf).getTime() / 1000);
+
+  const conditions = [
+    // rejected は公開しない
+    ne(lotteries.verificationStatus, "rejected"),
+    // orphaned / archived は公開しない
+    eq(lotteries.lifecycleStatus, "active"),
+    ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
+    ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : []),
+  ];
+  const where = and(...conditions);
+
+  // CTE 1: 終了/発表時刻をエポック秒に正規化する（生SQLの重複を避けるための中間列）。
+  const classified = db.$with("classified").as(
+    db
+      .select({
+        id: lotteries.id,
+        endEpoch: endAtEpochExpr(lotteries.applicationEndAt, lotteries.applicationEndDate).as("end_epoch"),
+        announceEpoch: endAtEpochExpr(lotteries.resultAnnouncementAt, lotteries.resultAnnouncementDate).as(
+          "announce_epoch"
+        ),
+      })
+      .from(lotteries)
+      .where(where)
+  );
+
+  // CTE 2: priority/sortKeyを算出する。カーソル条件・ORDER BYはこのCTEの列だけを参照する。
+  const prioritized = db.$with("prioritized").as(
+    db
+      .select({
+        id: classified.id,
+        priority: sql<number>`CASE
+          WHEN ${classified.endEpoch} IS NULL THEN 3
+          WHEN ${classified.endEpoch} > ${nowEpoch} THEN 0
+          WHEN ${classified.announceEpoch} IS NOT NULL AND ${classified.announceEpoch} > ${nowEpoch} THEN 1
+          ELSE 2
+        END`.as("priority"),
+        sortKey: sql<number>`CASE
+          WHEN ${classified.endEpoch} IS NULL THEN 0
+          WHEN ${classified.endEpoch} > ${nowEpoch} THEN ${classified.endEpoch}
+          WHEN ${classified.announceEpoch} IS NOT NULL AND ${classified.announceEpoch} > ${nowEpoch} THEN ${classified.announceEpoch}
+          ELSE -COALESCE(${classified.announceEpoch}, ${classified.endEpoch})
+        END`.as("sort_key"),
+      })
+      .from(classified)
+  );
+
+  const cursorCondition = cursor
+    ? sql`(${prioritized.priority}, ${prioritized.sortKey}, ${prioritized.id}) > (${cursor.priority}, ${cursor.sortKey}, ${cursor.id})`
+    : undefined;
+
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .with(classified, prioritized)
+      .select({
+        ...getTableColumns(lotteries),
+        priority: prioritized.priority,
+        sortKey: prioritized.sortKey,
+      })
+      .from(prioritized)
+      .innerJoin(lotteries, eq(lotteries.id, prioritized.id))
+      .where(cursorCondition)
+      .orderBy(asc(prioritized.priority), asc(prioritized.sortKey), asc(prioritized.id))
+      // 次ページの有無を判定するため1件多く取得する
+      .limit(limit + 1),
+    db.select({ total: count() }).from(lotteries).where(where),
+  ]);
+
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+  const last = pageRows[pageRows.length - 1];
+
+  const nextCursor =
+    hasMore && last ? encodeLotteryListCursor({ priority: last.priority, sortKey: last.sortKey, id: last.id, asOf }) : null;
+
+  return {
+    lotteries: pageRows.map(({ priority: _priority, sortKey: _sortKey, ...rest }) => rest as LotteryRow),
+    total,
+    nextCursor,
+  };
+}
+
+export interface ListLotteriesByOffsetOptions {
   cardType?: string;
   verificationStatus?: string;
   limit?: number;
   offset?: number;
 }
 
-export interface ListLotteriesResult {
+export interface ListLotteriesByOffsetResult {
   lotteries: LotteryRow[];
   total: number;
 }
 
-/** 公開 GET /lotteries 用の一覧取得（ページネーション + フィルタ）。
- * デフォルトで rejected + orphaned/archived を除外する。
+/**
+ * 内部管理画面（`/internal/review-items`）専用の単純なoffsetページネーション。
+ * 公開一覧（`listLotteries`）の受付中/結果待ち/終了済みソートとは無関係に、
+ * 作成日時降順で確認待ちの抽選を並べるだけでよいため、キーセットページネーションは適用しない。
  */
-export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions = {}): Promise<ListLotteriesResult> {
+export async function listLotteriesByOffset(
+  db: DbOrTx,
+  opts: ListLotteriesByOffsetOptions = {}
+): Promise<ListLotteriesByOffsetResult> {
   const { cardType, verificationStatus, limit = 20, offset = 0 } = opts;
 
   const conditions = [
-    // rejected は公開しない
     ne(lotteries.verificationStatus, "rejected"),
-    // orphaned / archived は公開しない
     eq(lotteries.lifecycleStatus, "active"),
     ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
     ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : []),
@@ -320,7 +470,6 @@ export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions = {})
       .offset(offset),
     db.select({ total: count() }).from(lotteries).where(where),
   ]);
-
 
   return { lotteries: rows, total };
 }

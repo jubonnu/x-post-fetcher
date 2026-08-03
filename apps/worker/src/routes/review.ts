@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Hono } from "hono";
 import type { AppEnv } from "../env.ts";
 import { lotteries } from "../db/schema.ts";
-import { getLotteryWithDetails, listLotteries } from "../repositories/lotteryRepository.ts";
+import { getLotteryWithDetails, listLotteriesByOffset } from "../repositories/lotteryRepository.ts";
 import { enqueueJob } from "../repositories/processingJobRepository.ts";
 import { sourcePosts } from "../db/schema.ts";
 
@@ -33,7 +33,7 @@ export function registerReview(app: Hono<AppEnv>): void {
     const limit = Math.min(Number(c.req.query("limit") ?? 20), 100);
     const offset = Math.max(Number(c.req.query("offset") ?? 0), 0);
 
-    const result = await listLotteries(db, { verificationStatus: statusFilter, limit, offset });
+    const result = await listLotteriesByOffset(db, { verificationStatus: statusFilter, limit, offset });
     return c.json({ ok: true, items: result.lotteries, total: result.total, limit, offset });
   });
 
