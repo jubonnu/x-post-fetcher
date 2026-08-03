@@ -6,6 +6,7 @@ import {
   markRevenuecatEventError,
   markRevenuecatEventProcessed,
   markRevenuecatEventStatus,
+  updateRevenuecatEventTransferContext,
 } from "../repositories/revenuecatEventRepository.ts";
 import { findSubscriptionEntitlement, upsertSubscriptionEntitlement } from "../repositories/subscriptionEntitlementRepository.ts";
 import { fetchRevenueCatEntitlement, type RevenueCatApiResult } from "./revenuecatClient.ts";
@@ -61,16 +62,25 @@ export function deriveProductType(
   return "unknown";
 }
 
+export interface AppUserIdCandidates {
+  appUserId: string;
+  originalAppUserId?: string | null;
+  aliases?: string[] | null;
+}
+
 /**
  * app_user_id → original_app_user_id → aliases の順にpublicUserId形式の値を探し、
  * 一致するCardHubユーザーを解決する。未知のユーザーは絶対に新規作成しない。一致した
  * 候補文字列自体をRevenueCat REST APIへの照会キー（App User ID）として使う。
+ * Webhook受信時（`RevenueCatWebhookEvent`から直接）・イベント再試行時
+ * （`revenuecat_events`に保存済みの列から再構築）の両方から呼べるよう、
+ * プレーンなフィールド集合を受け取る形にしている（`services/revenuecatEventRetryService.ts`参照）。
  */
-async function resolveCandidateAppUserId(
+export async function resolveCandidateAppUserId(
   db: DbOrTx,
-  event: RevenueCatWebhookEvent
+  candidates_: AppUserIdCandidates
 ): Promise<{ user: UserRow; appUserId: string } | null> {
-  const candidates = [event.app_user_id, event.original_app_user_id, ...(event.aliases ?? [])].filter(
+  const candidates = [candidates_.appUserId, candidates_.originalAppUserId, ...(candidates_.aliases ?? [])].filter(
     (v): v is string => !!v && UUID_REGEX.test(v)
   );
   for (const candidate of candidates) {
@@ -80,15 +90,16 @@ async function resolveCandidateAppUserId(
   return null;
 }
 
-type UserVerificationOutcome = "applied" | "superseded" | "unknown_user" | "api_failure";
+export type UserVerificationOutcome = "applied" | "superseded" | "unknown_user" | "api_failure";
 
 /**
  * 解決済みユーザー1件分の「REST APIで現在状態を取得し、より新しければ反映する」処理。
  * Webhookイベントのtype（grant/revoke等）を直接信用せず、常にRevenueCatの現在状態を
  * 正として書き込む——イベントの到着順序が入れ替わっても最終的にRevenueCatの実状態と
  * 一致する（Mobile-G4 Hardening「イベント順序逆転対策」）。
+ * イベント再試行（`revenuecatEventRetryService.ts`）からも再利用する。
  */
-async function verifyAndApplyForResolvedUser(
+export async function verifyAndApplyForResolvedUser(
   db: DbOrTx,
   publicUserId: string,
   eventTimestamp: string,
@@ -207,7 +218,11 @@ async function processNormalEvent(
     return "ignored_not_premium";
   }
 
-  const resolved = await resolveCandidateAppUserId(db, event);
+  const resolved = await resolveCandidateAppUserId(db, {
+    appUserId: event.app_user_id,
+    originalAppUserId: event.original_app_user_id,
+    aliases: event.aliases,
+  });
   if (!resolved) {
     await markRevenuecatEventProcessed(db, eventRowId, "ignored_unknown_user");
     return "ignored_unknown_user";
@@ -234,14 +249,50 @@ async function processNormalEvent(
   return "processed";
 }
 
+export interface TransferSidesOutcome {
+  anyApplied: boolean;
+  anyKnown: boolean;
+  anyFailure: boolean;
+}
+
+/**
+ * TRANSFERの移譲元・移譲先（両配列を結合した一意なApp User ID群）それぞれについて個別に
+ * REST照合・反映を行う（移譲元・移譲先どちらがpremiumを持つべきかをコード側で仮定せず、
+ * RevenueCatの現在状態をそのまま反映する）。Webhook受信経路・Cron再試行経路の両方から
+ * 呼ぶ共通ロジック（`revenuecatEventRetryService.ts`参照）。
+ */
+export async function processTransferSides(
+  db: DbOrTx,
+  uniqueIds: string[],
+  eventTimestamp: string,
+  environment: string,
+  config: RevenueCatProcessingConfig,
+  source: string
+): Promise<TransferSidesOutcome> {
+  let anyApplied = false;
+  let anyKnown = false;
+  let anyFailure = false;
+
+  for (const publicUserId of uniqueIds) {
+    const outcome = await verifyAndApplyForResolvedUser(db, publicUserId, eventTimestamp, environment, config, source);
+    if (outcome === "unknown_user") continue;
+    anyKnown = true;
+    if (outcome === "applied") anyApplied = true;
+    if (outcome === "api_failure") anyFailure = true;
+  }
+
+  return { anyApplied, anyKnown, anyFailure };
+}
+
 /**
  * TRANSFERイベント専用処理（Mobile-G4 Hardening、通常イベントとは別スキーマ・別フロー）。
- * `transferred_from`・`transferred_to`はそれぞれ複数件になり得るため、両配列を結合した
- * 一意なApp User ID群それぞれについて個別にREST照合・反映を行う（移譲元・移譲先どちらが
- * premiumを持つべきかをコード側で仮定せず、RevenueCatの現在状態をそのまま反映する）。
  * 一方が未知ユーザーでも既知の側だけは処理する。既知ユーザーのいずれかでREST照合が
  * 一時失敗した場合はイベント全体を`failed_retryable`として記録する（成功した側の反映は
  * 保持しつつ、未確定の側があることを示す）。
+ *
+ * `failed_retryable`になった場合にCronで再試行できるよう、パース成功時点で
+ * `transferred_from`/`transferred_to`を`revenuecat_events`へ最小限のコンテキストとして
+ * 保存する（rawPayload全体は保持しない。追加Hardening、課金公開前Blocker対応）。
  */
 async function processTransferEvent(
   db: DbOrTx,
@@ -262,6 +313,11 @@ async function processTransferEvent(
     return "ignored_not_premium";
   }
 
+  await updateRevenuecatEventTransferContext(db, eventRowId, {
+    transferredFromJson: JSON.stringify(parsed.data.transferred_from),
+    transferredToJson: JSON.stringify(parsed.data.transferred_to),
+  });
+
   const candidateIds = [...parsed.data.transferred_from, ...parsed.data.transferred_to].filter((v) => UUID_REGEX.test(v));
   const uniqueIds = [...new Set(candidateIds)];
 
@@ -270,17 +326,14 @@ async function processTransferEvent(
     return "ignored_unknown_user";
   }
 
-  let anyApplied = false;
-  let anyKnown = false;
-  let anyFailure = false;
-
-  for (const publicUserId of uniqueIds) {
-    const outcome = await verifyAndApplyForResolvedUser(db, publicUserId, eventTimestamp, environment, config, "webhook_transfer");
-    if (outcome === "unknown_user") continue;
-    anyKnown = true;
-    if (outcome === "applied") anyApplied = true;
-    if (outcome === "api_failure") anyFailure = true;
-  }
+  const { anyApplied, anyKnown, anyFailure } = await processTransferSides(
+    db,
+    uniqueIds,
+    eventTimestamp,
+    environment,
+    config,
+    "webhook_transfer"
+  );
 
   if (!anyKnown) {
     await markRevenuecatEventProcessed(db, eventRowId, "ignored_unknown_user");

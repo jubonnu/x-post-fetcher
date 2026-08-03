@@ -2,6 +2,7 @@ import { createApp } from "./app.ts";
 import { createDb } from "./db/client.web.ts";
 import type { Env } from "./env.ts";
 import { retryAppleRevocationBatch } from "./services/appleRevocationService.ts";
+import { retryFailedRevenuecatEventsBatch } from "./services/revenuecatEventRetryService.ts";
 
 /**
  * Cloudflare Workers エントリ（Edge）。
@@ -29,6 +30,29 @@ async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext
         console.error(
           JSON.stringify({
             event: "apple_revocation_retry_batch_failed",
+            message: e instanceof Error ? e.message : "unknown error",
+          })
+        );
+      })
+  );
+
+  // failed_retryableなRevenueCatイベントの再処理（Mobile-G4 Hardening、課金公開前Blocker）。
+  ctx.waitUntil(
+    retryFailedRevenuecatEventsBatch({
+      db,
+      config: {
+        secretApiKey: env.REVENUECAT_SECRET_API_KEY,
+        monthlyProductId: env.REVENUECAT_MONTHLY_PRODUCT_ID,
+        lifetimeProductId: env.REVENUECAT_LIFETIME_PRODUCT_ID,
+      },
+    })
+      .then((result) => {
+        console.log(JSON.stringify({ event: "revenuecat_event_retry_batch", ...result }));
+      })
+      .catch((e: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "revenuecat_event_retry_batch_failed",
             message: e instanceof Error ? e.message : "unknown error",
           })
         );

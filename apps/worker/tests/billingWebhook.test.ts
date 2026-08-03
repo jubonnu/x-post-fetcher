@@ -465,6 +465,14 @@ describe("POST /webhooks/revenuecat", () => {
 
       expect((await getSubscriptionEntitlement(fromUserId))?.premiumActive).toBe(false);
       expect((await getSubscriptionEntitlement(toUserId))?.premiumActive).toBe(true);
+
+      // 再試行に必要な最小コンテキスト（transferred_from/to）が保存されていること（課金公開前Blocker対応）。
+      const [eventRow] = await db
+        .select()
+        .from(revenuecatEvents)
+        .where(eq(revenuecatEvents.appUserId, toUserPublicId));
+      expect(JSON.parse(eventRow.transferredFromJson!)).toEqual([fromUserPublicId]);
+      expect(JSON.parse(eventRow.transferredToJson!)).toEqual([toUserPublicId]);
     });
 
     it("transferred_fromが複数件でもそれぞれ照合する", async () => {

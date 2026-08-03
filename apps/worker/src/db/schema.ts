@@ -827,6 +827,11 @@ export const revenuecatEvents = sqliteTable(
     originalAppUserId: text("original_app_user_id"),
     // JSON文字列化したaliases配列（存在する場合のみ）
     aliasesJson: text("aliases_json"),
+    // TRANSFERイベント専用（Mobile-G4 Hardening、自動再試行対応）。JSON文字列化した
+    // transferred_from/transferred_to配列。rawPayload全体は保持しない方針のため、
+    // 再試行に必要な最小限のコンテキストのみをこの2列へ保存する。TRANSFER以外は常にnull。
+    transferredFromJson: text("transferred_from_json"),
+    transferredToJson: text("transferred_to_json"),
     environment: text("environment").notNull(),
     eventTimestamp: text("event_timestamp").notNull(),
     payloadHash: text("payload_hash").notNull(),

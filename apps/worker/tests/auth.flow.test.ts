@@ -59,13 +59,14 @@ afterAll(() => {
 
 async function loginWithApple(
   overrides: Partial<Omit<SignTestAppleTokenOptions, "privateKey">> = {},
-  deviceId = "device-1"
+  deviceId = "device-1",
+  extra: { fullName?: string } = {}
 ) {
   const identityToken = await signTestAppleToken({ privateKey, ...overrides });
   const res = await app.request("/auth/apple", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ identityToken, deviceId }),
+    body: JSON.stringify({ identityToken, deviceId, ...extra }),
   });
   const body = await res.json();
   return { res, body };
@@ -116,6 +117,52 @@ describe("POST /auth/apple", () => {
       body: JSON.stringify({}),
     });
     expect(res.status).toBe(422);
+  });
+
+  it("初回サインイン時にfullNameを送るとdisplayNameとして保存される", async () => {
+    const { body } = await loginWithApple({ sub: "sub-display-name-1", email: "dn1@example.com" }, "device-dn-1", {
+      fullName: "安田潤",
+    });
+    expect(body.user.displayName).toBe("安田潤");
+  });
+
+  it("fullName無しの初回サインインではdisplayNameはnullのまま", async () => {
+    const { body } = await loginWithApple({ sub: "sub-display-name-2", email: "dn2@example.com" }, "device-dn-2");
+    expect(body.user.displayName).toBeNull();
+  });
+
+  it("ログアウト後の再ログイン相当（fullName無し）でも、既に保存済みのdisplayNameは維持される", async () => {
+    const first = await loginWithApple({ sub: "sub-display-name-3", email: "dn3@example.com" }, "device-dn-3a", {
+      fullName: "安田潤",
+    });
+    expect(first.body.user.displayName).toBe("安田潤");
+
+    // 2回目はAppleがfullNameを送ってこない（標準的な挙動）。
+    const second = await loginWithApple({ sub: "sub-display-name-3", email: "dn3@example.com" }, "device-dn-3b");
+    expect(second.body.user.publicUserId).toBe(first.body.user.publicUserId);
+    expect(second.body.user.displayName).toBe("安田潤");
+  });
+
+  it("displayName未設定のユーザーが後からfullName付きで再ログインすると保存される（Apple ID連携リセット相当）", async () => {
+    const first = await loginWithApple({ sub: "sub-display-name-4", email: "dn4@example.com" }, "device-dn-4a");
+    expect(first.body.user.displayName).toBeNull();
+
+    const second = await loginWithApple({ sub: "sub-display-name-4", email: "dn4@example.com" }, "device-dn-4b", {
+      fullName: "田中太郎",
+    });
+    expect(second.body.user.displayName).toBe("田中太郎");
+  });
+
+  it("既にdisplayNameが保存済みの場合、別のfullNameが送られても上書きしない", async () => {
+    const first = await loginWithApple({ sub: "sub-display-name-5", email: "dn5@example.com" }, "device-dn-5a", {
+      fullName: "最初の名前",
+    });
+    expect(first.body.user.displayName).toBe("最初の名前");
+
+    const second = await loginWithApple({ sub: "sub-display-name-5", email: "dn5@example.com" }, "device-dn-5b", {
+      fullName: "別の名前",
+    });
+    expect(second.body.user.displayName).toBe("最初の名前"); // 上書きされない
   });
 });
 

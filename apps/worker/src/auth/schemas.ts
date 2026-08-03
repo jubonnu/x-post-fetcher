@@ -12,6 +12,12 @@ export const appleAuthRequestSchema = z.object({
   rawNonce: z.string().optional(),
   deviceId: z.string().min(1),
   deviceName: z.string().optional(),
+  /**
+   * Appleが初回認可時にのみ返すfullName（Mobile-G4 Hardening）。クライアント側で
+   * 表示用に組み立てた文字列をそのまま受け取り、`users.displayName`が未設定の場合のみ
+   * 保存する（`routes/auth.ts`側で判定。既存のdisplayNameを上書きしない）。
+   */
+  fullName: z.string().min(1).max(200).optional(),
 });
 
 export const refreshRequestSchema = z.object({

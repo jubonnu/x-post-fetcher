@@ -210,7 +210,12 @@ export function registerAuth(app: Hono<AppEnv>): void {
 
           try {
             const created = await createUserWithAppleIdentityAtomic(db, {
-              profile: { sub: claims.sub, email: claims.email, emailIsPrivateRelay: claims.isPrivateEmail },
+              profile: {
+                sub: claims.sub,
+                email: claims.email,
+                emailIsPrivateRelay: claims.isPrivateEmail,
+                displayName: parsed.data.fullName,
+              },
               encryptedAppleToken,
               device: { deviceId: parsed.data.deviceId, deviceName: parsed.data.deviceName },
               audit: { ipHash: await sha256Hex(ip), requestId: c.get("requestId") },
@@ -231,7 +236,14 @@ export function registerAuth(app: Hono<AppEnv>): void {
           await touchUserOnAppleLogin(db, {
             userId: existing.user.id,
             identityId: existing.identity.id,
-            profile: { sub: claims.sub, email: claims.email, emailIsPrivateRelay: claims.isPrivateEmail },
+            profile: {
+              sub: claims.sub,
+              email: claims.email,
+              emailIsPrivateRelay: claims.isPrivateEmail,
+              // AppleがfullNameを送ってきても、既にdisplayName保存済みなら上書きしない
+              // （既存値を消す方向の変更はしない、Mobile-G4 Hardening）。
+              displayName: !existing.user.displayName ? parsed.data.fullName : undefined,
+            },
           });
 
           if (exchangeConfig) {

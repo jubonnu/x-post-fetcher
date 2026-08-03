@@ -4,7 +4,7 @@ compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
 # --- シークレット（`wrangler secret put <NAME>` で登録。ここには値を書かない） ---
-#   INGEST_TOKEN        … /ingest の Bearer トークン
+#   INGEST_TOKEN        … /ingest の Bearer トークン（/internal/* の内部APIもこれを流用）
 #   TURSO_DATABASE_URL  … libsql://<db>.turso.io
 #   TURSO_AUTH_TOKEN    … Turso のトークン
 #
@@ -29,5 +29,27 @@ compatibility_flags = ["nodejs_compat"]
 #   APPLE_TOKEN_ENCRYPTION_KEY_PREVIOUS        … （鍵ローテーション中のみ）直前世代の暗号鍵
 #   APPLE_TOKEN_ENCRYPTION_KEY_PREVIOUS_VERSION … （鍵ローテーション中のみ）直前世代の世代タグ
 #
+# --- RevenueCat課金基盤（Mobile-G4）。未設定の間は対応する機能が503 BILLING_NOT_CONFIGURED /
+#     failed_retryableとしてfail-closedになる（他の既存機能には影響しない）---
+#   REVENUECAT_WEBHOOK_AUTH_HEADER     … RevenueCat WebhookのAuthorization header共有値
+#   REVENUECAT_WEBHOOK_HMAC_SECRET     … RevenueCat公式HMAC署名検証用シークレット（Authorization headerと併用必須の方針）
+#   REVENUECAT_SECRET_API_KEY          … RevenueCat REST API用Secret API Key（`sk_`プレフィックス）
+#   REVENUECAT_MONTHLY_PRODUCT_ID      … 月額Product ID（確定値: cardhub_premium_monthly）
+#   REVENUECAT_LIFETIME_PRODUCT_ID     … 買い切りProduct ID（確定値: cardhub_premium_lifetime）
+#
+#   ※ App Store Connect API Key・In-App Purchase Key（いずれも.p8）はRevenueCatダッシュボードへ
+#     直接アップロードするものであり、このWorker・このリポジトリのどこにも保存しない
+#     （Cloudflare Secrets・.env・wrangler.tomlのいずれにも登場しない）。
+#
 # ※ Workers 本番では db/client.ts の @libsql/client を @libsql/client/web へ切替が必要。
 #   （ローカル検証は `npm run worker:dev` の Node サーバーで行う）
+
+# --- 環境分離（Mobile-G4 Hardening）: RevenueCat Webhook疎通確認等をいきなりproductionへ
+#     向けないためのstaging環境。`wrangler deploy --env staging`で本番とは別名のWorkerとして
+#     デプロイされる（デフォルトの`*.workers.dev`URLも本番と別になる）。
+#     Secretsは環境ごとに独立するため、`wrangler secret put <NAME> --env staging`で別途登録する
+#     （本番のTURSO_DATABASE_URL等とは物理的に別のTurso DBを指すこと——Sandboxイベントが
+#     本番DBへ混入しないようにするための必須要件）。
+#     このブロック自体はまだ実デプロイしていない（scaffoldingのみ）。
+[env.staging]
+name = "x-post-ingest-staging"

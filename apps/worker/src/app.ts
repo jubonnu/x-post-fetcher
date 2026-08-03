@@ -17,6 +17,7 @@ import { registerMeFollowedProducts } from "./routes/meFollowedProducts.ts";
 import { registerMeLotteries } from "./routes/meLotteries.ts";
 import { registerMeNotificationPreferences } from "./routes/meNotificationPreferences.ts";
 import { registerMeSyncBootstrap } from "./routes/meSyncBootstrap.ts";
+import { registerRevenuecatEventRetry } from "./routes/revenuecatEventRetry.ts";
 import { registerReview } from "./routes/review.ts";
 
 /**
@@ -61,6 +62,10 @@ export function createApp(createDb: CreateDb) {
   // RevenueCat Webhook（Mobile-G4）。CardHubのJWT認証(`requireAuth`)は使わず、RevenueCat専用の
   // 認証で保護するため、`requireAuthConfigured`より前・独立した経路として登録する。
   registerBillingWebhook(app);
+
+  // failed_retryableなRevenueCatイベントの再処理（内部API、Cron Triggerからも同じロジックを呼ぶ。
+  // Mobile-G4 Hardening、課金公開前Blocker）。
+  registerRevenuecatEventRetry(app);
 
   // 認証・アカウントAPI（Mobile-G2A）。
   // 認証設定が不正/未設定の場合はここで503 AUTH_NOT_CONFIGUREDにし、以降のハンドラへ進ませない。

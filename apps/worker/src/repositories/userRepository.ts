@@ -8,6 +8,8 @@ export interface AppleSignInProfile {
   sub: string;
   email?: string;
   emailIsPrivateRelay?: boolean;
+  /** Appleが初回認可時にのみ渡すfullName（Mobile-G4 Hardening）。 */
+  displayName?: string;
 }
 
 export interface UserWithAppleIdentity {
@@ -101,6 +103,7 @@ export async function createUserWithAppleIdentityAtomic(
         publicUserId,
         email: params.profile.email ?? null,
         emailIsPrivateRelay: params.profile.emailIsPrivateRelay ?? null,
+        displayName: params.profile.displayName ?? null,
         accountStatus: "active",
         lastLoginAt: now,
       })
@@ -157,6 +160,8 @@ export async function touchUserOnAppleLogin(
   const userUpdate: Partial<typeof users.$inferInsert> = { lastLoginAt: now, updatedAt: now };
   if (profile.email !== undefined) userUpdate.email = profile.email;
   if (profile.emailIsPrivateRelay !== undefined) userUpdate.emailIsPrivateRelay = profile.emailIsPrivateRelay;
+  // displayNameは呼び出し側（routes/auth.ts）が「現在未設定の場合のみ」渡す（既存値を上書きしない）。
+  if (profile.displayName !== undefined) userUpdate.displayName = profile.displayName;
   await db.update(users).set(userUpdate).where(eq(users.id, userId));
 
   const identityUpdate: Partial<typeof userIdentities.$inferInsert> = {};
