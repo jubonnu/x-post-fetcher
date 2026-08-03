@@ -216,6 +216,27 @@ describe("POST /webhooks/revenuecat", () => {
     });
   });
 
+  describe("RevenueCatが送るnullフィールド（Sometimesフィールド）の許容", () => {
+    it("entitlement_id/entitlement_ids/transaction_id/original_transaction_idがnullでも422にならない（RevenueCatのTESTイベント相当）", async () => {
+      const rawBody = JSON.stringify({
+        api_version: "1.0",
+        event: {
+          id: crypto.randomUUID(),
+          type: "TEST",
+          app_user_id: crypto.randomUUID(),
+          entitlement_id: null,
+          entitlement_ids: null,
+          transaction_id: null,
+          original_transaction_id: null,
+          environment: "SANDBOX",
+        },
+      });
+      const res = await postWebhookRaw(rawBody);
+      expect(res.status).toBe(200);
+      expect((await res.json()).status).toBe("ignored_unknown_event");
+    });
+  });
+
   describe("HMAC（公式形式限定）", () => {
     afterEach(() => {
       delete process.env.REVENUECAT_WEBHOOK_HMAC_SECRET;
