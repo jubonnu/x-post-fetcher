@@ -16,6 +16,7 @@ import { registerMeFavorites } from "./routes/meFavorites.ts";
 import { registerMeFollowedProducts } from "./routes/meFollowedProducts.ts";
 import { registerMeLotteries } from "./routes/meLotteries.ts";
 import { registerMeNotificationPreferences } from "./routes/meNotificationPreferences.ts";
+import { registerMeStatistics } from "./routes/meStatistics.ts";
 import { registerMeSyncBootstrap } from "./routes/meSyncBootstrap.ts";
 import { registerRevenuecatEventRetry } from "./routes/revenuecatEventRetry.ts";
 import { registerReview } from "./routes/review.ts";
@@ -86,6 +87,9 @@ export function createApp(createDb: CreateDb) {
 
   // RevenueCat premium entitlements（Mobile-G4）
   registerMeEntitlements(app);
+
+  // 統計・分析（Mobile-G6、premium必須）
+  registerMeStatistics(app);
 
   return app;
 }

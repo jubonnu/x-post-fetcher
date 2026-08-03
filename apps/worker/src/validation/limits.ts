@@ -23,6 +23,13 @@ export const SYNC_MAX_PAYLOAD_BYTES = 512 * 1024;
 /** clientRequestId/deviceId/batchClientRequestId は UUID形式のみ許可する。 */
 export const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** GET /me/statistics/monthly の`months`クエリ（Mobile-G6）。 */
+export const STATISTICS_MONTHLY_DEFAULT_MONTHS = 1;
+export const STATISTICS_MONTHLY_MAX_MONTHS = 24;
+/** GET /me/statistics/stores の`limit`クエリ（Mobile-G6）。 */
+export const STATISTICS_STORES_DEFAULT_LIMIT = 5;
+export const STATISTICS_STORES_MAX_LIMIT = 20;
+
 export function isParsableDate(value: string): boolean {
   return !Number.isNaN(Date.parse(value));
 }
