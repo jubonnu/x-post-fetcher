@@ -3,6 +3,13 @@ main = "src/index.ts"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
 
+# --- Cron Trigger（`src/index.ts`の`scheduled`ハンドラ）。1時間毎。
+#     Apple側トークン失効の再試行・RevenueCatイベント再試行・猶予期間経過後のアカウント物理削除
+#     （Mobile-G2A残修正: これが無いとscheduledハンドラのコードが存在していても本番では
+#     一切呼ばれず、`POST /internal/*/retry-batch`の手動実行に頼るしかなかった）。
+[triggers]
+crons = ["0 * * * *"]
+
 # --- シークレット（`wrangler secret put <NAME>` で登録。ここには値を書かない） ---
 #   INGEST_TOKEN        … /ingest の Bearer トークン（/internal/* の内部APIもこれを流用）
 #   TURSO_DATABASE_URL  … libsql://<db>.turso.io

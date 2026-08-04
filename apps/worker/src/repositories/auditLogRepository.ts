@@ -7,7 +7,9 @@ export type AuditAction =
   | "logout_all"
   | "refresh_reuse_detected"
   | "account_deletion_requested"
-  | "account_deletion_request_duplicate";
+  | "account_deletion_request_duplicate"
+  | "account_deletion_cancelled"
+  | "account_deletion_completed";
 
 /**
  * 監査ログを記録する。トークン・パスワード等の機密情報は`detail`に含めないこと

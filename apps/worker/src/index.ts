@@ -1,6 +1,7 @@
 import { createApp } from "./app.ts";
 import { createDb } from "./db/client.web.ts";
 import type { Env } from "./env.ts";
+import { runAccountHardDeletionBatch } from "./services/accountHardDeletionService.ts";
 import { retryAppleRevocationBatch } from "./services/appleRevocationService.ts";
 import { retryFailedRevenuecatEventsBatch } from "./services/revenuecatEventRetryService.ts";
 
@@ -53,6 +54,24 @@ async function scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext
         console.error(
           JSON.stringify({
             event: "revenuecat_event_retry_batch_failed",
+            message: e instanceof Error ? e.message : "unknown error",
+          })
+        );
+      })
+  );
+
+  // 猶予期間（14日）を過ぎたpending_deletionアカウントの物理削除（Mobile-G2A残修正）。
+  // これが無いと、UI上「〇月〇日に削除されます」と案内しているにもかかわらずアカウントが
+  // pending_deletionのまま永続してしまう。
+  ctx.waitUntil(
+    runAccountHardDeletionBatch({ db })
+      .then((result) => {
+        console.log(JSON.stringify({ event: "account_hard_deletion_batch", ...result }));
+      })
+      .catch((e: unknown) => {
+        console.error(
+          JSON.stringify({
+            event: "account_hard_deletion_batch_failed",
             message: e instanceof Error ? e.message : "unknown error",
           })
         );

@@ -329,7 +329,11 @@ export type AuditLogInsert = typeof auditLogs.$inferInsert;
 /**
  * account_deletion_requests — 猶予期間付きアカウント削除の状態管理。
  * `DELETE /me` は即時物理削除ではなくこの行を作成し `users.accountStatus` を
- * pending_deletion にするのみ（物理削除の実行バッチはG2Aの範囲外）。
+ * pending_deletion にするのみ。猶予期間経過後の物理削除バッチは
+ * `repositories/accountDeletionRepository.ts` の `hardDeleteUserAccount`
+ * （`services/accountHardDeletionService.ts` 経由、Cron Trigger実行、Mobile-G2A残修正）。
+ * `pending_deletion` 中に再サインインした場合は `cancelPendingAccountDeletion` が
+ * `status` を cancelled にし `users.accountStatus` を active へ戻す。
  *
  * `appleRevocationStatus`系（Mobile-G2A-Hardening）:
  * CardHub側のアカウント削除自体はApple側の失効結果を待たずに完了させる

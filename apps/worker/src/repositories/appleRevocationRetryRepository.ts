@@ -36,7 +36,13 @@ export async function findAppleRevocationRetryTargets(
   return db
     .select()
     .from(accountDeletionRequests)
-    .where(conditions)
+    .where(
+      // 削除要求自体が取り消し済み（再サインインでの取消）・完了済み（ハードデリート済み）の行は、
+      // appleRevocationStatusがfailed_will_retryのままでも再試行対象から除外する（Mobile-G2A残修正）。
+      // これが無いと、取消済み＝現在アクティブなアカウントに対してApple側トークン失効を
+      // 誤って実行してしまう。
+      and(eq(accountDeletionRequests.status, "pending"), conditions)
+    )
     .orderBy(asc(accountDeletionRequests.appleRevocationNextRetryAt))
     .limit(limit);
 }
@@ -80,6 +86,8 @@ export async function claimRequestForRetry(
     .where(
       and(
         eq(accountDeletionRequests.id, requestId),
+        // 取消/完了済みの削除要求はクレームさせない（`findAppleRevocationRetryTargets`と同じ理由）。
+        eq(accountDeletionRequests.status, "pending"),
         or(
           eq(accountDeletionRequests.appleRevocationStatus, "failed_will_retry"),
           and(

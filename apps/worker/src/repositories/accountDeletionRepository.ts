@@ -1,7 +1,21 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, lte } from "drizzle-orm";
 import type { Db } from "../db/client.ts";
-import { accountDeletionRequests, users, type AccountDeletionRequestRow } from "../db/schema.ts";
+import {
+  accountDeletionRequests,
+  checklistProgress,
+  followedProducts,
+  idempotencyRecords,
+  notificationPreferences,
+  refreshTokens,
+  subscriptionEntitlements,
+  userFavorites,
+  userIdentities,
+  userLotteries,
+  users,
+  type AccountDeletionRequestRow,
+} from "../db/schema.ts";
 import { APPLE_REVOCATION_MAX_ATTEMPTS, computeNextRetryAt } from "../services/appleRevocationBackoff.ts";
+import { recordAuditLog } from "./auditLogRepository.ts";
 
 export interface AccountDeletionResult {
   requestId: number;
@@ -66,6 +80,45 @@ export async function requestAccountDeletion(
     alreadyRequested: false,
     appleRevocationStatus: inserted.appleRevocationStatus,
   };
+}
+
+/**
+ * `pending_deletion`のユーザーが再サインインした場合に、削除要求を取り消す
+ * （アプリ内の案内文「それまでは再度サインインすると取り消せます」を実際に実装する）。
+ * `pending`状態のaccount_deletion_requests行が無ければ何もしない（既に取消/完了済み、
+ * またはそもそも削除要求が無かった場合。呼び出し側`routes/auth.ts`は
+ * `users.accountStatus === "pending_deletion"`の場合のみ呼ぶため通常は存在するはずだが、
+ * ハードデリートバッチと競合した場合は0件になり得る＝その場合は取消ではなく新規ユーザー扱いになる）。
+ * Apple側トークン失効の状態（`appleRevocationStatus`等）はこの行に残ったままにする
+ * （`findAppleRevocationRetryTargets`が`status`列も見るため、cancelled行はCron再試行対象から外れる）。
+ */
+export async function cancelPendingAccountDeletion(db: Db, userId: number): Promise<{ cancelled: boolean }> {
+  const now = new Date().toISOString();
+
+  return db.transaction(async (tx) => {
+    const [cancelledRequest] = await tx
+      .update(accountDeletionRequests)
+      .set({ status: "cancelled", cancelledAt: now, reason: "signed_in_again" })
+      .where(and(eq(accountDeletionRequests.userId, userId), eq(accountDeletionRequests.status, "pending")))
+      .returning();
+
+    if (!cancelledRequest) {
+      return { cancelled: false };
+    }
+
+    await tx
+      .update(users)
+      .set({ accountStatus: "active", deletionRequestedAt: null, scheduledDeletionAt: null, updatedAt: now })
+      .where(eq(users.id, userId));
+
+    await recordAuditLog(tx, {
+      userId,
+      action: "account_deletion_cancelled",
+      detail: { requestId: cancelledRequest.id },
+    });
+
+    return { cancelled: true };
+  });
 }
 
 /**
@@ -164,4 +217,105 @@ export async function recordAppleRevocationFailure(
  */
 export function shouldAttemptAppleRevocation(row: Pick<AccountDeletionRequestRow, "appleRevocationStatus">): boolean {
   return row.appleRevocationStatus !== "succeeded" && row.appleRevocationStatus !== "failed_permanently";
+}
+
+/**
+ * 猶予期間（`scheduledDeletionAt`）を過ぎた物理削除バッチの対象を取得する。
+ * `status = "pending"`のみを対象にするため、`cancelPendingAccountDeletion`で取り消された
+ * 行やハードデリート完了済みの行は自然に除外される。
+ */
+export async function findAccountHardDeletionTargets(
+  db: Db,
+  params: { now?: string; limit?: number } = {}
+): Promise<AccountDeletionRequestRow[]> {
+  const now = params.now ?? new Date().toISOString();
+  const limit = params.limit ?? 20;
+
+  return db
+    .select()
+    .from(accountDeletionRequests)
+    .where(and(eq(accountDeletionRequests.status, "pending"), lte(accountDeletionRequests.scheduledDeletionAt, now)))
+    .orderBy(asc(accountDeletionRequests.scheduledDeletionAt))
+    .limit(limit);
+}
+
+/**
+ * 猶予期間経過後の物理削除本体。単一のDBトランザクションで実行する（Mobile-G2A残修正）。
+ *
+ * 冒頭の条件付きUPDATE（`WHERE status = "pending"`）がクレーム兼フェンシングを兼ねる。
+ * これが0件（既にcancelled/completedへ遷移済み＝再サインインでの取消と競合した場合等）なら
+ * 即座に`{ deleted: false }`を返し、以降のデータ削除は一切行わない。
+ * 途中で例外が発生した場合はトランザクション全体がロールバックされ、`status`は"pending"の
+ * ままになる（＝次回バッチ実行時に自動的に再試行される。事後的な"processing"状態は持たない）。
+ *
+ * データ削除方針:
+ * - `user_lotteries`/`user_favorites`/`followed_products`/`checklist_progress`は
+ *   既存の論理削除（`deletedAt`）方式に揃える。`user_lottery_status_history`等の
+ *   追加型履歴（統計用、物理削除しない設計）が参照する行を残さないため。
+ * - Apple識別子・暗号化トークン（`user_identities`）、Refresh Token、通知設定、
+ *   RevenueCat購読状態、冪等性台帳は、他の行から参照されないPII/認証情報のため物理削除する。
+ * - `audit_logs`（userId参照）は監査目的で物理削除しないため、`users`行自体は残し
+ *   PIIのみ消去して`accountStatus = "deleted"`にする。
+ */
+export async function hardDeleteUserAccount(
+  db: Db,
+  params: { requestId: number; userId: number }
+): Promise<{ deleted: boolean }> {
+  const { requestId, userId } = params;
+  const now = new Date().toISOString();
+
+  return db.transaction(async (tx) => {
+    const [claimed] = await tx
+      .update(accountDeletionRequests)
+      .set({ status: "completed", completedAt: now })
+      .where(and(eq(accountDeletionRequests.id, requestId), eq(accountDeletionRequests.status, "pending")))
+      .returning();
+
+    if (!claimed) {
+      return { deleted: false };
+    }
+
+    await tx
+      .update(userLotteries)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(and(eq(userLotteries.userId, userId), isNull(userLotteries.deletedAt)));
+    await tx
+      .update(userFavorites)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(and(eq(userFavorites.userId, userId), isNull(userFavorites.deletedAt)));
+    await tx
+      .update(followedProducts)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(and(eq(followedProducts.userId, userId), isNull(followedProducts.deletedAt)));
+    await tx
+      .update(checklistProgress)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(and(eq(checklistProgress.userId, userId), isNull(checklistProgress.deletedAt)));
+
+    await tx.delete(notificationPreferences).where(eq(notificationPreferences.userId, userId));
+    await tx.delete(subscriptionEntitlements).where(eq(subscriptionEntitlements.userId, userId));
+    await tx.delete(idempotencyRecords).where(eq(idempotencyRecords.userId, userId));
+    await tx.delete(refreshTokens).where(eq(refreshTokens.userId, userId));
+    await tx.delete(userIdentities).where(eq(userIdentities.userId, userId));
+
+    await tx
+      .update(users)
+      .set({
+        accountStatus: "deleted",
+        displayName: null,
+        email: null,
+        emailIsPrivateRelay: null,
+        deletedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(users.id, userId));
+
+    await recordAuditLog(tx, {
+      userId,
+      action: "account_deletion_completed",
+      detail: { requestId },
+    });
+
+    return { deleted: true };
+  });
 }

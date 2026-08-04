@@ -3,6 +3,7 @@ import type { CreateDb } from "./db/client.ts";
 import type { AppEnv, Env } from "./env.ts";
 import { requireAuthConfigured } from "./auth/middleware.ts";
 import { publicApiCors } from "./publicCors.ts";
+import { registerAccountHardDeletionRetry } from "./routes/accountHardDeletionRetry.ts";
 import { registerAppleRevocationRetry } from "./routes/appleRevocationRetry.ts";
 import { registerAuth } from "./routes/auth.ts";
 import { registerBillingWebhook } from "./routes/billingWebhook.ts";
@@ -59,6 +60,9 @@ export function createApp(createDb: CreateDb) {
 
   // Apple側トークン失効の再試行（内部API、Cron Triggerからも同じロジックを呼ぶ。Mobile-G2A-Hardening）
   registerAppleRevocationRetry(app);
+
+  // 猶予期間経過後のアカウント物理削除バッチ（内部API、Cron Triggerからも同じロジックを呼ぶ。Mobile-G2A残修正）
+  registerAccountHardDeletionRetry(app);
 
   // RevenueCat Webhook（Mobile-G4）。CardHubのJWT認証(`requireAuth`)は使わず、RevenueCat専用の
   // 認証で保護するため、`requireAuthConfigured`より前・独立した経路として登録する。

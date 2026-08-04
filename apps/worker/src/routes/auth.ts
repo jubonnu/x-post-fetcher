@@ -23,6 +23,7 @@ import {
   rotateRefreshToken,
 } from "../repositories/refreshTokenRepository.ts";
 import { issueRefreshToken } from "../repositories/refreshTokenRepository.ts";
+import { cancelPendingAccountDeletion } from "../repositories/accountDeletionRepository.ts";
 import {
   createUserWithAppleIdentityAtomic,
   findUserByAppleSub,
@@ -245,6 +246,13 @@ export function registerAuth(app: Hono<AppEnv>): void {
               displayName: !existing.user.displayName ? parsed.data.fullName : undefined,
             },
           });
+
+          if (existing.user.accountStatus === "pending_deletion") {
+            // アプリ内の案内文「それまでは再度サインインすると取り消せます」を実際に実装する
+            // （Mobile-G2A残修正）。削除要求と同時に全端末が強制サインアウトされているため、
+            // ここへ到達できるのは新しいSign in with Appleフロー経由のみ。
+            await cancelPendingAccountDeletion(db, existing.user.id);
+          }
 
           if (exchangeConfig) {
             const hasStoredToken = Boolean(
