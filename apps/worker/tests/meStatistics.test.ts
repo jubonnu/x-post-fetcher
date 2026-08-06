@@ -143,10 +143,16 @@ describe("GET /me/statistics/summary", () => {
 
     expect(body.savedCount).toBe(6);
     expect(body.plannedCount).toBe(1);
+    // appliedCountは応募試行数（[1]応募済み・[2]当選・[3]落選・[4]当選＝4試行。[0]は未応募、
+    // [5]はunknownからskippedへ直接遷移＝応募自体の見送りのため試行に含まれない）
+    expect(body.appliedCount).toBe(4);
     expect(body.wonCount).toBe(2); // won(1件) + purchased(1件、won経由)
     expect(body.lostCount).toBe(1);
+    expect(body.pendingResultCount).toBe(1); // [1]応募済みのまま結果未確定
     expect(body.purchasedCount).toBe(1);
-    expect(body.skippedCount).toBe(1);
+    // skippedCountは「当選確定後の購入見送り」のみを数える（応募自体の見送りは含まない）ため、
+    // [5]（unknown→skippedで一度も応募していない）は0件になる
+    expect(body.skippedCount).toBe(0);
     expect(body.winRate).toBeCloseTo(2 / 3);
   });
 
@@ -202,7 +208,77 @@ describe("GET /me/statistics/stores", () => {
     const body = await res.json();
 
     expect(body.items).toHaveLength(2);
-    expect(body.items[0]).toMatchObject({ storeName: "店舗A", winRate: 1 });
-    expect(body.items[1]).toMatchObject({ storeName: "店舗B", winRate: 0.5 });
+    expect(body.items[0]).toMatchObject({ storeName: "店舗A", winRate: 1, pendingResultCount: 0 });
+    expect(body.items[1]).toMatchObject({ storeName: "店舗B", winRate: 0.5, pendingResultCount: 0 });
+  });
+});
+
+describe("応募試行の再構築（見送り後の再応募）", () => {
+  it("applied→won→skipped→planned→applied→lostは2試行（当選1・落選1）として数える", async () => {
+    const { accessToken, publicUserId } = await loginAs("sub-stats-reapply", "device-1");
+    await makePremium(publicUserId);
+    const lotteryId = await insertLottery();
+
+    let v = (await putStatus(accessToken, lotteryId, "applied")).serverVersion;
+    v = (await putStatus(accessToken, lotteryId, "won", v)).serverVersion; // 1試行目: 当選
+    v = (await putStatus(accessToken, lotteryId, "skipped", v)).serverVersion; // 購入見送り
+    v = (await putStatus(accessToken, lotteryId, "planned", v)).serverVersion; // 見送りの取り消し
+    v = (await putStatus(accessToken, lotteryId, "applied", v)).serverVersion; // 2試行目の開始
+    await putStatus(accessToken, lotteryId, "lost", v); // 2試行目: 落選
+
+    const res = await app.request("/me/statistics/summary", { headers: authHeaders(accessToken) });
+    const body = await res.json();
+
+    expect(body.appliedCount).toBe(2);
+    expect(body.wonCount).toBe(1);
+    expect(body.lostCount).toBe(1);
+    expect(body.skippedCount).toBe(1); // 1試行目の購入見送り
+    expect(body.winRate).toBeCloseTo(0.5);
+  });
+});
+
+describe("summary/monthly/storesの集計一致", () => {
+  it("同じ応募試行の再構築結果から算出されるため、件数の合計が一致する", async () => {
+    const { accessToken, publicUserId } = await loginAs("sub-stats-consistency", "device-1");
+    await makePremium(publicUserId);
+
+    const storeAWon = await insertLottery({ normalizedStoreName: "一致検証店A" });
+    const storeALost = await insertLottery({ normalizedStoreName: "一致検証店A" });
+    const storeBWon = await insertLottery({ normalizedStoreName: "一致検証店B" });
+    const storeBLost = await insertLottery({ normalizedStoreName: "一致検証店B" });
+
+    for (const [lotteryId, result] of [
+      [storeAWon, "won"],
+      [storeALost, "lost"],
+      [storeBWon, "won"],
+      [storeBLost, "lost"],
+    ] as const) {
+      const v = (await putStatus(accessToken, lotteryId, "applied")).serverVersion;
+      await putStatus(accessToken, lotteryId, result, v);
+    }
+
+    const [summaryRes, monthlyRes, storesRes] = await Promise.all([
+      app.request("/me/statistics/summary", { headers: authHeaders(accessToken) }),
+      app.request("/me/statistics/monthly?months=12", { headers: authHeaders(accessToken) }),
+      app.request("/me/statistics/stores", { headers: authHeaders(accessToken) }),
+    ]);
+    const summary = await summaryRes.json();
+    const monthly = (await monthlyRes.json()).items as { appliedCount: number; wonCount: number; lostCount: number }[];
+    const stores = (await storesRes.json()).items as { appliedCount: number; wonCount: number; lostCount: number }[];
+
+    const monthlyTotals = monthly.reduce(
+      (acc, m) => ({ applied: acc.applied + m.appliedCount, won: acc.won + m.wonCount, lost: acc.lost + m.lostCount }),
+      { applied: 0, won: 0, lost: 0 }
+    );
+    const storeTotals = stores.reduce(
+      (acc, s) => ({ applied: acc.applied + s.appliedCount, won: acc.won + s.wonCount, lost: acc.lost + s.lostCount }),
+      { applied: 0, won: 0, lost: 0 }
+    );
+
+    expect(summary.appliedCount).toBe(4);
+    expect(summary.wonCount).toBe(2);
+    expect(summary.lostCount).toBe(2);
+    expect(monthlyTotals).toEqual({ applied: summary.appliedCount, won: summary.wonCount, lost: summary.lostCount });
+    expect(storeTotals).toEqual({ applied: summary.appliedCount, won: summary.wonCount, lost: summary.lostCount });
   });
 });

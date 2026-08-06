@@ -1,21 +1,52 @@
-import { and, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull } from "drizzle-orm";
 import type { DbOrTx } from "../db/client.ts";
 import { lotteries, userLotteries, userLotteryStatusHistory } from "../db/schema.ts";
+import {
+  computeWinRate,
+  lastNMonthsJst,
+  reconstructAttempts,
+  toJstYearMonth,
+  type LotteryAttempt,
+  type StatusHistoryEvent,
+} from "../services/lotteryAttempts.ts";
+import type { LotteryStatus } from "../services/lotteryStatusTransitions.ts";
 
 /**
  * 統計API（Mobile-G6、premium必須）の集計ロジック。
  *
- * `deletedAt`の扱い: `GET /me/lotteries`一覧と一貫させるため、`deletedAt IS NULL`（現在保存中の
- * 抽選のみ）を対象にする。削除済みデータを当選率へ含めるかは意見が分かれる論点
- * （docs/mobile-g1-...10.3節）だが、今回は「自分の抽選一覧の実績」として一貫性を優先する
- * シンプルな方針を採用する。
+ * 2026-08の仕様変更: 「lotteryIdの現在ステータス」単位の集計から、
+ * 「1回の応募試行（application attempt）」単位の集計へ変更した（`services/lotteryAttempts.ts`）。
+ * 見送り後の再応募・訂正入力などで同一lotteryIdが複数回の試行を持ちうるため、
+ * lotteryId単位で重複排除するのではなく、履歴から再構築した試行ごとに数える。
+ * summary/monthly/storesはすべてこの同じ再構築結果を入力として使う。
  *
- * `skipped`ステータスの扱い: 遷移ホワイトリスト上`planned→skipped`（応募自体の見送り）と
- * `won→skipped`（当選後の購入見送り）の2経路があり、現在のステータス値だけでは区別できない
- * （履歴の`fromStatus`を都度確認すれば区別できるが、今回のMVPスコープでは行わない）。
- * そのため`skippedCount`は独立した集計値として返すのみとし、当選数・当選率の計算には
- * 含めない（`purchased`は`won`経由でしか到達できないため`wonCount`に安全に合算できる）。
+ * `deletedAt`の扱い: `GET /me/lotteries`一覧と一貫させるため、`deletedAt IS NULL`（現在保存中の
+ * 抽選のみ）を対象にする。
  */
+
+/** `userLotteryId`ごとの履歴を`id`昇順（実発生順）で取得する。deletedAtの有効行のみが対象。 */
+async function fetchAttemptsForUser(db: DbOrTx, userId: number): Promise<LotteryAttempt[]> {
+  const rows = await db
+    .select({
+      userLotteryId: userLotteryStatusHistory.userLotteryId,
+      fromStatus: userLotteryStatusHistory.fromStatus,
+      toStatus: userLotteryStatusHistory.toStatus,
+      changedAt: userLotteryStatusHistory.changedAt,
+    })
+    .from(userLotteryStatusHistory)
+    .innerJoin(userLotteries, eq(userLotteries.id, userLotteryStatusHistory.userLotteryId))
+    .where(and(eq(userLotteries.userId, userId), isNull(userLotteries.deletedAt)))
+    .orderBy(asc(userLotteryStatusHistory.id));
+
+  const events: StatusHistoryEvent[] = rows.map((row) => ({
+    lotteryId: row.userLotteryId,
+    fromStatus: row.fromStatus as LotteryStatus | null,
+    toStatus: row.toStatus as LotteryStatus,
+    changedAt: row.changedAt,
+  }));
+
+  return reconstructAttempts(events);
+}
 
 export interface StatisticsSummary {
   savedCount: number;
@@ -24,61 +55,53 @@ export interface StatisticsSummary {
   notAppliedCount: number;
   wonCount: number;
   lostCount: number;
+  /** 結果がまだ確定していない試行数（応募数には含むが、当選率の分母には含まない）。 */
+  pendingResultCount: number;
+  /** 当選確定後、購入済みとして記録された試行数。 */
   purchasedCount: number;
+  /** 当選確定後、購入を見送ったとして記録された試行数（応募自体を見送った件数ではない）。 */
   skippedCount: number;
   /** wonCount / (wonCount + lostCount)。分母0（結果が出た件が無い）ならnull（「計算不可」）。 */
   winRate: number | null;
 }
 
 export async function getStatisticsSummary(db: DbOrTx, userId: number): Promise<StatisticsSummary> {
-  const rows = await db
+  // savedCount/plannedCount/notAppliedCountは「現在保存している抽選の状態」を表す
+  // スナップショット値であり、応募試行の集計対象ではないため従来通りuser_lotteries.statusから出す。
+  const savedRows = await db
     .select({ status: userLotteries.status })
     .from(userLotteries)
     .where(and(eq(userLotteries.userId, userId), isNull(userLotteries.deletedAt)));
 
-  const countOf = (status: string) => rows.filter((r) => r.status === status).length;
-  const wonCount = countOf("won") + countOf("purchased");
-  const lostCount = countOf("lost");
-  const decided = wonCount + lostCount;
+  const attempts = await fetchAttemptsForUser(db, userId);
+  const wonCount = attempts.filter((a) => a.result === "won").length;
+  const lostCount = attempts.filter((a) => a.result === "lost").length;
+  const pendingResultCount = attempts.filter((a) => a.result === null).length;
 
   return {
-    savedCount: rows.length,
-    plannedCount: countOf("planned"),
-    appliedCount: countOf("applied") + countOf("won") + countOf("lost") + countOf("purchased") + countOf("skipped"),
-    notAppliedCount: countOf("unknown") + countOf("planned"),
+    savedCount: savedRows.length,
+    plannedCount: savedRows.filter((r) => r.status === "planned").length,
+    appliedCount: attempts.length,
+    notAppliedCount: savedRows.filter((r) => r.status === "unknown" || r.status === "planned").length,
     wonCount,
     lostCount,
-    purchasedCount: countOf("purchased"),
-    skippedCount: countOf("skipped"),
-    winRate: decided > 0 ? wonCount / decided : null,
+    pendingResultCount,
+    purchasedCount: attempts.filter((a) => a.purchaseState === "purchased").length,
+    skippedCount: attempts.filter((a) => a.purchaseState === "skipped").length,
+    winRate: computeWinRate(attempts),
   };
 }
 
 export interface MonthlyStatisticsItem {
   /** JST基準の年月（例: "2026-08"）。 */
   month: string;
+  /** その月に開始した応募試行数（基準日時: 試行開始日時）。 */
   appliedCount: number;
+  /** その月に結果がwon確定した試行数（基準日時: 結果確定日時）。 */
   wonCount: number;
+  /** その月に結果がlost確定した試行数（基準日時: 結果確定日時）。 */
   lostCount: number;
   winRate: number | null;
-}
-
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-function toJstYearMonth(iso: string): string {
-  const jst = new Date(new Date(iso).getTime() + JST_OFFSET_MS);
-  return `${jst.getUTCFullYear()}-${String(jst.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/** `referenceIso`が属するJSTの月を起点に、遡って`months`件分の年月文字列を古い順で返す。 */
-function lastNMonthsJst(months: number, referenceIso: string): string[] {
-  const jstRef = new Date(new Date(referenceIso).getTime() + JST_OFFSET_MS);
-  const result: string[] = [];
-  for (let i = months - 1; i >= 0; i--) {
-    const d = new Date(Date.UTC(jstRef.getUTCFullYear(), jstRef.getUTCMonth() - i, 1));
-    result.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
-  }
-  return result;
 }
 
 export async function getStatisticsMonthly(
@@ -87,26 +110,29 @@ export async function getStatisticsMonthly(
   months: number,
   referenceIso: string = new Date().toISOString()
 ): Promise<MonthlyStatisticsItem[]> {
-  const rows = await db
-    .select({ toStatus: userLotteryStatusHistory.toStatus, changedAt: userLotteryStatusHistory.changedAt })
-    .from(userLotteryStatusHistory)
-    .innerJoin(userLotteries, eq(userLotteries.id, userLotteryStatusHistory.userLotteryId))
-    .where(eq(userLotteries.userId, userId));
+  const attempts = await fetchAttemptsForUser(db, userId);
 
-  const buckets = new Map<string, { applied: number; won: number; lost: number }>();
-  for (const row of rows) {
-    const month = toJstYearMonth(row.changedAt);
-    const bucket = buckets.get(month) ?? { applied: 0, won: 0, lost: 0 };
-    if (row.toStatus === "applied") bucket.applied += 1;
-    if (row.toStatus === "won") bucket.won += 1;
-    if (row.toStatus === "lost") bucket.lost += 1;
-    buckets.set(month, bucket);
+  const appliedBuckets = new Map<string, number>();
+  const resultBuckets = new Map<string, { won: number; lost: number }>();
+
+  for (const attempt of attempts) {
+    const startMonth = toJstYearMonth(attempt.startedAt);
+    appliedBuckets.set(startMonth, (appliedBuckets.get(startMonth) ?? 0) + 1);
+
+    if (attempt.result && attempt.resultAt) {
+      const resultMonth = toJstYearMonth(attempt.resultAt);
+      const bucket = resultBuckets.get(resultMonth) ?? { won: 0, lost: 0 };
+      if (attempt.result === "won") bucket.won += 1;
+      else bucket.lost += 1;
+      resultBuckets.set(resultMonth, bucket);
+    }
   }
 
   return lastNMonthsJst(months, referenceIso).map((month) => {
-    const b = buckets.get(month) ?? { applied: 0, won: 0, lost: 0 };
-    const decided = b.won + b.lost;
-    return { month, appliedCount: b.applied, wonCount: b.won, lostCount: b.lost, winRate: decided > 0 ? b.won / decided : null };
+    const applied = appliedBuckets.get(month) ?? 0;
+    const { won, lost } = resultBuckets.get(month) ?? { won: 0, lost: 0 };
+    const decided = won + lost;
+    return { month, appliedCount: applied, wonCount: won, lostCount: lost, winRate: decided > 0 ? won / decided : null };
   });
 }
 
@@ -115,28 +141,37 @@ export interface StoreStatisticsItem {
   appliedCount: number;
   wonCount: number;
   lostCount: number;
+  /** 結果がまだ確定していない試行数。 */
+  pendingResultCount: number;
   winRate: number;
 }
 
 const NO_STORE_LABEL = "店舗情報なし";
-const DECIDED_STATUSES = new Set(["applied", "won", "lost", "purchased", "skipped"]);
 
 /** 店舗別の当選率ランキング。結果（当選/落選）が1件も無い店舗はランキング対象外にする。 */
 export async function getStatisticsStores(db: DbOrTx, userId: number, limit: number): Promise<StoreStatisticsItem[]> {
-  const rows = await db
-    .select({ storeName: lotteries.normalizedStoreName, status: userLotteries.status })
-    .from(userLotteries)
-    .innerJoin(lotteries, eq(lotteries.id, userLotteries.lotteryId))
-    .where(and(eq(userLotteries.userId, userId), isNull(userLotteries.deletedAt)));
+  const [attempts, lotteryStoreRows] = await Promise.all([
+    fetchAttemptsForUser(db, userId),
+    db
+      .select({ userLotteryId: userLotteries.id, storeName: lotteries.normalizedStoreName })
+      .from(userLotteries)
+      .innerJoin(lotteries, eq(lotteries.id, userLotteries.lotteryId))
+      .where(and(eq(userLotteries.userId, userId), isNull(userLotteries.deletedAt))),
+  ]);
 
-  const buckets = new Map<string, { applied: number; won: number; lost: number }>();
-  for (const row of rows) {
-    const key = row.storeName ?? NO_STORE_LABEL;
-    const bucket = buckets.get(key) ?? { applied: 0, won: 0, lost: 0 };
-    if (DECIDED_STATUSES.has(row.status)) bucket.applied += 1;
-    if (row.status === "won" || row.status === "purchased") bucket.won += 1;
-    if (row.status === "lost") bucket.lost += 1;
-    buckets.set(key, bucket);
+  const storeNameByUserLotteryId = new Map(lotteryStoreRows.map((r) => [r.userLotteryId, r.storeName ?? NO_STORE_LABEL]));
+
+  const buckets = new Map<string, { applied: number; won: number; lost: number; pending: number }>();
+  for (const attempt of attempts) {
+    const storeName = storeNameByUserLotteryId.get(attempt.lotteryId);
+    if (storeName === undefined) continue; // 削除済み等で対象外になったuserLotteryId
+
+    const bucket = buckets.get(storeName) ?? { applied: 0, won: 0, lost: 0, pending: 0 };
+    bucket.applied += 1;
+    if (attempt.result === "won") bucket.won += 1;
+    else if (attempt.result === "lost") bucket.lost += 1;
+    else bucket.pending += 1;
+    buckets.set(storeName, bucket);
   }
 
   return [...buckets.entries()]
@@ -146,6 +181,7 @@ export async function getStatisticsStores(db: DbOrTx, userId: number, limit: num
       appliedCount: b.applied,
       wonCount: b.won,
       lostCount: b.lost,
+      pendingResultCount: b.pending,
       winRate: b.won / (b.won + b.lost),
     }))
     .sort((a, b) => b.winRate - a.winRate)

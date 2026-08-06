@@ -26,6 +26,17 @@ export function isLotteryStatus(value: string): value is LotteryStatus {
  * （モバイル側で確認ダイアログを必須にする前提、バックエンドはホワイトリストのみ強制）。
  * `skipped → planned`（見送りの取り消し）を許可する。
  * `lost → applied`は明示的に禁止（10.2節）。
+ *
+ * 決定事項（2026-08、統計の応募試行集計の設計時に検討）:
+ * `skipped → won`（`purchased → won`と対称的な「購入見送りの訂正」）は**意図的に許可しない**。
+ * 理由: 現状`skipped`は「応募前の見送り」（`planned/unknown → skipped`）と「当選後の購入見送り」
+ * （`won → skipped`）の2つの意味が単一のstatus値に混在しており、単一status設計のまま
+ * `skipped → won`を許可すると、統計の応募試行集計（`services/lotteryAttempts.ts`）側で
+ * 誤集計の余地が生まれる（例: 応募前見送りだったものを誤って当選訂正扱いしてしまう等）。
+ * 統計の集計関数自体は`skipped → won`が来ても防御的に処理できるが、それは将来この制約が
+ * 緩和された場合への備えであり、現在のAPIとしては引き続き禁止する。
+ * 将来的な検討事項: `application`（応募したか）・`result`（当選/落選）・`purchase`（購入/見送り）を
+ * 別軸のフィールドに分離すれば、この曖昧さを構造的に解消できる。
  */
 const TRANSITIONS: Record<LotteryStatus, readonly LotteryStatus[]> = {
   unknown: ["planned", "applied", "won", "lost", "purchased", "skipped"],
