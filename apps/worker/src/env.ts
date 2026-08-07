@@ -1,4 +1,5 @@
 import type { Db, DbEnv } from "./db/client.ts";
+import type { AdminAuthRuntimeConfig } from "./adminAuth/config.ts";
 import type { AuthRuntimeConfig } from "./auth/config.ts";
 
 /** Worker が参照する環境変数（Workers Bindings / Node process.env） */
@@ -82,6 +83,19 @@ export interface Env extends DbEnv {
    */
   REVENUECAT_MONTHLY_PRODUCT_ID?: string;
   REVENUECAT_LIFETIME_PRODUCT_ID?: string;
+
+  /**
+   * 管理画面（Phase 7）関連。招待コード方式のサインアップに必須の共有シークレットと、
+   * 管理者用JWT（モバイルの`JWT_SIGNING_KEY_*`とは完全に別系統）の署名鍵。
+   * いずれか未設定の間は`/admin/auth/*`を503 AUTH_NOT_CONFIGUREDにする（fail-closed）。
+   */
+  ADMIN_INVITE_CODE?: string;
+  ADMIN_JWT_SECRET?: string;
+  /** 管理画面Webアプリ（Cloudflare Pages）のOriginをカンマ区切りで指定。`/admin/*`のCORS許可に使う。 */
+  ADMIN_WEB_ORIGINS?: string;
+
+  /** 商品画像（管理画面からのアップロード）保存用R2バケット（Phase 7）。 */
+  LOTTERY_IMAGES?: R2Bucket;
 }
 
 export type Variables = {
@@ -95,6 +109,10 @@ export type Variables = {
   publicUserId?: string;
   /** `requireAuthConfigured`ミドルウェアが検証済みの認証設定（Mobile-G2A-Hardening）。 */
   authConfig?: AuthRuntimeConfig;
+  /** `requireAdminAuthConfigured`ミドルウェアが検証済みの管理画面認証設定（Phase 7）。 */
+  adminAuthConfig?: AdminAuthRuntimeConfig;
+  /** `requireAdminAuth`ミドルウェア通過後にのみ設定される、管理者アカウントの整数id（Phase 7）。 */
+  adminUserId?: number;
 };
 
 export type AppEnv = { Bindings: Env; Variables: Variables };

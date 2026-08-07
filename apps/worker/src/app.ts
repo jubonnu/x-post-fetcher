@@ -1,9 +1,13 @@
 import { Hono } from "hono";
 import type { CreateDb } from "./db/client.ts";
 import type { AppEnv, Env } from "./env.ts";
+import { adminApiCors } from "./adminAuth/cors.ts";
+import { requireAdminAuthConfigured } from "./adminAuth/middleware.ts";
 import { requireAuthConfigured } from "./auth/middleware.ts";
 import { publicApiCors } from "./publicCors.ts";
 import { registerAccountHardDeletionRetry } from "./routes/accountHardDeletionRetry.ts";
+import { registerAdminAuth } from "./routes/adminAuth.ts";
+import { registerAdminLotteries } from "./routes/adminLotteries.ts";
 import { registerAppleRevocationRetry } from "./routes/appleRevocationRetry.ts";
 import { registerAuth } from "./routes/auth.ts";
 import { registerBillingWebhook } from "./routes/billingWebhook.ts";
@@ -41,6 +45,23 @@ export function createApp(createDb: CreateDb) {
 
   // ヘルスチェック（公開）
   app.get("/", (c) => c.json({ ok: true, service: "x-post ingest worker", phase: 5 }));
+
+  // 商品画像の配信（Phase 7、公開・認証不要）。バケット自体は非公開のままWorker経由でのみ読み出す
+  // （<Image>タグ等での表示に認証は不要かつ不可能なため、通常の公開GETとして提供する）。
+  app.get("/images/:key", async (c) => {
+    const bucket = c.get("env").LOTTERY_IMAGES;
+    if (!bucket) return c.notFound();
+
+    const object = await bucket.get(c.req.param("key"));
+    if (!object) return c.notFound();
+
+    return new Response(object.body, {
+      headers: {
+        "Content-Type": object.httpMetadata?.contentType ?? "application/octet-stream",
+        "Cache-Control": "public, max-age=31536000, immutable",
+      },
+    });
+  });
 
   // 公開GET API（/lotteries系）のみCORSを許可する。/ingest・/internal/* には適用しない。
   app.use("/lotteries", publicApiCors());
@@ -94,6 +115,13 @@ export function createApp(createDb: CreateDb) {
 
   // 統計・分析（Mobile-G6、premium必須）
   registerMeStatistics(app);
+
+  // 管理画面API（Phase 7: 抽選データの確認・承認・却下・編集用webアプリ、別デプロイのCloudflare Pagesから呼ぶ）。
+  // モバイル向け認証（Sign in with Apple）とは完全に別系統。認証設定不正なら/admin/*全体を503にする。
+  app.use("/admin/*", adminApiCors());
+  app.use("/admin/*", requireAdminAuthConfigured);
+  registerAdminAuth(app);
+  registerAdminLotteries(app);
 
   return app;
 }

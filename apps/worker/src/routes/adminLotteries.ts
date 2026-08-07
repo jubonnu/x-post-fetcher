@@ -1,0 +1,172 @@
+import type { Hono } from "hono";
+import { z } from "zod";
+import { requireAdminAuth } from "../adminAuth/middleware.ts";
+import { ApiError, apiErrorJson } from "../auth/errors.ts";
+import { findAdminUserById } from "../repositories/adminUserRepository.ts";
+import {
+  approveLotteryByAdmin,
+  getLotteryWithDetails,
+  listLotteriesForAdmin,
+  rejectLotteryByAdmin,
+  updateLotteryByAdmin,
+  type AdminLotteryUpdateInput,
+} from "../repositories/lotteryRepository.ts";
+import type { AppEnv } from "../env.ts";
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/png": "png",
+  "image/jpeg": "jpg",
+  "image/webp": "webp",
+};
+
+const listQuerySchema = z.object({
+  verificationStatus: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(100).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+// 空文字は「クリア」の意図で送られてくる想定のためnullへ正規化する（フォームのテキスト欄クリア操作を想定）。
+const nullableText = z
+  .string()
+  .max(2000)
+  .nullable()
+  .transform((v) => (v === "" ? null : v));
+
+const updateLotterySchema = z.object({
+  productNameRaw: nullableText.optional(),
+  storeNameRaw: nullableText.optional(),
+  applicationEndAt: z.string().datetime().nullable().optional(),
+  resultAnnouncementAt: z.string().datetime().nullable().optional(),
+  purchaseDeadlineAt: z.string().datetime().nullable().optional(),
+  applicationMethod: nullableText.optional(),
+  applicationUrl: nullableText.optional(),
+});
+
+const rejectBodySchema = z.object({ reason: z.string().max(2000).nullable().optional() });
+
+function parseId(idParam: string | undefined): number | null {
+  const id = Number(idParam);
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+async function parseJsonBody(c: { req: { json: () => Promise<unknown> } }): Promise<unknown | null> {
+  try {
+    return await c.req.json();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 管理画面（Phase 7）用の抽選CRUD API。`/admin/*`全体に`requireAdminAuthConfigured`が
+ * app.ts側で適用済みの前提。全エンドポイントに`requireAdminAuth`を個別付与する
+ * （`/admin/auth/*`のsignup/loginのみ未認証で叩けるようにするため、ここではまとめてuseしない）。
+ */
+export function registerAdminLotteries(app: Hono<AppEnv>): void {
+  app.get("/admin/lotteries", requireAdminAuth, async (c) => {
+    const parsed = listQuerySchema.safeParse({
+      verificationStatus: c.req.query("verificationStatus") ?? undefined,
+      limit: c.req.query("limit") ?? undefined,
+      offset: c.req.query("offset") ?? undefined,
+    });
+    if (!parsed.success) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "クエリパラメータが不正です"));
+
+    const db = c.get("db");
+    const result = await listLotteriesForAdmin(db, parsed.data);
+    return c.json({ items: result.lotteries, total: result.total });
+  });
+
+  app.get("/admin/lotteries/:id", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+    return c.json(detail);
+  });
+
+  app.post("/admin/lotteries/:id/approve", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+
+    const admin = await findAdminUserById(db, c.get("adminUserId")!);
+    await approveLotteryByAdmin(db, id, admin!.email);
+    return c.json({ ok: true });
+  });
+
+  app.post("/admin/lotteries/:id/reject", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+
+    const body = (await parseJsonBody(c)) ?? {};
+    const parsed = rejectBodySchema.safeParse(body);
+    if (!parsed.success) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストの形式が不正です"));
+
+    await rejectLotteryByAdmin(db, id, parsed.data.reason ?? null);
+    return c.json({ ok: true });
+  });
+
+  app.patch("/admin/lotteries/:id", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+
+    const body = await parseJsonBody(c);
+    if (body === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストボディが不正です"));
+
+    const parsed = updateLotterySchema.safeParse(body);
+    if (!parsed.success) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストの形式が不正です"));
+
+    await updateLotteryByAdmin(db, id, parsed.data as AdminLotteryUpdateInput);
+    const updated = await getLotteryWithDetails(db, id);
+    return c.json(updated);
+  });
+
+  app.post("/admin/lotteries/:id/image", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+
+    const contentType = c.req.header("Content-Type") ?? "";
+    const extension = EXTENSION_BY_CONTENT_TYPE[contentType];
+    if (!extension) {
+      return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "対応していない画像形式です（png/jpeg/webpのみ）"));
+    }
+
+    const bucket = c.get("env").LOTTERY_IMAGES;
+    if (!bucket) return apiErrorJson(c, new ApiError("CONFIG_ERROR", "画像保存先が設定されていません"));
+
+    const bytes = await c.req.arrayBuffer();
+    if (bytes.byteLength === 0) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "画像データが空です"));
+    if (bytes.byteLength > MAX_IMAGE_BYTES) {
+      return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "画像サイズが上限（5MB）を超えています"));
+    }
+
+    const key = `${id}-${Date.now()}.${extension}`;
+    await bucket.put(key, bytes, { httpMetadata: { contentType } });
+
+    // モバイルアプリはこのURLをそのまま`<Image>`へ渡すだけなので、相対パスではなく
+    // このWorker自身のoriginを含む絶対URLで保存する（このリクエストが実際に届いたoriginを使う
+    // ことで、staging/production・カスタムドメインの違いを気にせず正しいURLになる）。
+    const origin = new URL(c.req.url).origin;
+    const imageUrl = `${origin}/images/${key}`;
+    await updateLotteryByAdmin(db, id, { imageUrl });
+    return c.json({ imageUrl });
+  });
+}

@@ -102,6 +102,8 @@ export const lotteries = sqliteTable("lotteries", {
   urlResolvedAt: text("url_resolved_at"),
   officialInformationUrl: text("official_information_url"),
   appDownloadUrl: text("app_download_url"),
+  // 管理画面（admin web）からのみ設定される。R2に保存した商品画像の公開URL（Phase 7）。
+  imageUrl: text("image_url"),
   applicationMethod: text("application_method"),
   eligibilityConditions: text("eligibility_conditions"),
   pickupMethod: text("pickup_method"),
@@ -855,3 +857,31 @@ export const revenuecatEvents = sqliteTable(
 
 export type RevenuecatEventRow = typeof revenuecatEvents.$inferSelect;
 export type RevenuecatEventInsert = typeof revenuecatEvents.$inferInsert;
+
+/**
+ * admin_users — 管理画面（Phase 7、抽選データの確認・編集用webアプリ）のアカウント。
+ * モバイル向け`users`（Sign in with Apple）とは完全に別系統。招待コード方式のサインアップ
+ * （`ADMIN_INVITE_CODE`環境変数と一致すれば誰でも作成可）で、メール確認は行わない。
+ * 認証はステートレスJWT（`adminAuth/token.ts`）のため、セッションテーブルは持たない
+ * （失効させたい場合はパスワード変更で足りる小規模運用を想定）。
+ */
+export const adminUsers = sqliteTable(
+  "admin_users",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    email: text("email").notNull(),
+    passwordHash: text("password_hash").notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => ({
+    emailUnique: uniqueIndex("admin_users_email_unique").on(t.email),
+  })
+);
+
+export type AdminUserRow = typeof adminUsers.$inferSelect;
+export type AdminUserInsert = typeof adminUsers.$inferInsert;

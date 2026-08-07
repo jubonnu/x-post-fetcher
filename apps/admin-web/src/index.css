@@ -1,0 +1,244 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --border: #e2e5ea;
+  --text: #14171f;
+  --text-muted: #6b7280;
+  --green: #0a8f4d;
+  --green-dark: #07733e;
+  --danger: #c62a20;
+  --warn-bg: #fdf1e3;
+  --warn-text: #a66a00;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+a {
+  color: var(--green-dark);
+}
+
+.page {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px 20px 64px;
+}
+
+.auth-page {
+  max-width: 380px;
+  margin: 64px auto;
+  padding: 0 20px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+}
+
+.header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  gap: 12px;
+}
+
+h1 {
+  font-size: 22px;
+  margin: 0;
+}
+
+h2 {
+  font-size: 17px;
+  margin: 0 0 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.field label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="datetime-local"],
+textarea {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 14px;
+  font-family: inherit;
+  width: 100%;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+}
+
+button.primary {
+  background: var(--green);
+  color: #fff;
+}
+
+button.primary:hover {
+  background: var(--green-dark);
+}
+
+button.secondary {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+button.danger {
+  background: var(--surface);
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.muted {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.nav-links {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.filter-tabs button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 6px 14px;
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.filter-tabs button.active {
+  background: var(--text);
+  color: #fff;
+  border-color: var(--text);
+}
+
+.lottery-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lottery-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+}
+
+.lottery-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  background: #eceef1;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.lottery-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.lottery-info .title {
+  font-weight: 700;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lottery-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.badge.approved {
+  background: #e7f5ee;
+  color: var(--green-dark);
+}
+
+.badge.rejected {
+  background: #f0f1f3;
+  color: #4b5158;
+}
+
+.badge.needs-review {
+  background: var(--warn-bg);
+  color: var(--warn-text);
+}
+
+.image-upload-preview {
+  width: 120px;
+  height: 120px;
+  border-radius: 10px;
+  background: #eceef1;
+  object-fit: cover;
+  margin-bottom: 10px;
+  display: block;
+}

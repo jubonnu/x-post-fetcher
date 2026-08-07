@@ -1,0 +1,239 @@
+/**
+ * Phase 7: 管理画面（/admin/lotteries/*）の結合テスト。
+ */
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { rmSync } from "node:fs";
+import { resolve } from "node:path";
+import { migrate } from "drizzle-orm/libsql/migrator";
+import { createDb } from "../src/db/client.node.ts";
+import { createApp } from "../src/app.ts";
+import { lotteries } from "../src/db/schema.ts";
+import type { Env } from "../src/env.ts";
+
+const DB_FILE = resolve(process.cwd(), `.tmp-admin-lotteries-${Date.now()}.db`);
+
+process.env.TURSO_DATABASE_URL = `file:${DB_FILE}`;
+process.env.ADMIN_INVITE_CODE = "test-invite-code";
+process.env.ADMIN_JWT_SECRET = "test-admin-jwt-secret-not-for-production";
+
+let app: ReturnType<typeof createApp>;
+const db = createDb({ TURSO_DATABASE_URL: `file:${DB_FILE}` });
+
+beforeAll(async () => {
+  await migrate(db, { migrationsFolder: "./migrations" });
+  app = createApp(createDb);
+});
+
+afterAll(() => {
+  rmSync(DB_FILE);
+});
+
+async function insertLottery(overrides: Partial<typeof lotteries.$inferInsert> = {}): Promise<number> {
+  const [row] = await db
+    .insert(lotteries)
+    .values({ productNameRaw: "テスト商品", normalizedProductName: "テスト商品", verificationStatus: "extracted", ...overrides })
+    .returning();
+  return row.id;
+}
+
+let adminToken: string;
+
+beforeAll(async () => {
+  const res = await app.request("/admin/auth/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: "crud-admin@example.com", password: "password123", inviteCode: "test-invite-code" }),
+  });
+  const body = (await res.json()) as { token: string };
+  adminToken = body.token;
+});
+
+function authHeaders() {
+  return { Authorization: `Bearer ${adminToken}` };
+}
+
+function jsonAuthHeaders() {
+  return { "Content-Type": "application/json", ...authHeaders() };
+}
+
+describe("GET /admin/lotteries", () => {
+  it("認証無しは401", async () => {
+    const res = await app.request("/admin/lotteries");
+    expect(res.status).toBe(401);
+  });
+
+  it("verificationStatusで絞り込める（rejected済みも一覧に含まれる）", async () => {
+    await insertLottery({ productNameRaw: "承認済み商品", verificationStatus: "approved" });
+    await insertLottery({ productNameRaw: "却下済み商品", verificationStatus: "rejected" });
+
+    const res = await app.request("/admin/lotteries?verificationStatus=rejected", { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { productNameRaw: string }[]; total: number };
+    expect(body.items.some((i) => i.productNameRaw === "却下済み商品")).toBe(true);
+    expect(body.items.every((i) => i.productNameRaw !== "承認済み商品")).toBe(true);
+  });
+});
+
+describe("POST /admin/lotteries/:id/approve, /reject", () => {
+  it("承認するとverificationStatus=approved、approvedByに管理者メールが記録される", async () => {
+    const id = await insertLottery();
+    const res = await app.request(`/admin/lotteries/${id}/approve`, { method: "POST", headers: authHeaders() });
+    expect(res.status).toBe(200);
+
+    const detailRes = await app.request(`/admin/lotteries/${id}`, { headers: authHeaders() });
+    const detail = (await detailRes.json()) as { lottery: { verificationStatus: string; approvedBy: string } };
+    expect(detail.lottery.verificationStatus).toBe("approved");
+    expect(detail.lottery.approvedBy).toBe("crud-admin@example.com");
+  });
+
+  it("却下するとverificationStatus=rejected、reasonが記録される", async () => {
+    const id = await insertLottery();
+    const res = await app.request(`/admin/lotteries/${id}/reject`, {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ reason: "情報が不正確なため" }),
+    });
+    expect(res.status).toBe(200);
+
+    const detailRes = await app.request(`/admin/lotteries/${id}`, { headers: authHeaders() });
+    const detail = (await detailRes.json()) as { lottery: { verificationStatus: string; rejectedReason: string } };
+    expect(detail.lottery.verificationStatus).toBe("rejected");
+    expect(detail.lottery.rejectedReason).toBe("情報が不正確なため");
+  });
+
+  it("存在しないidは404", async () => {
+    const res = await app.request("/admin/lotteries/999999/approve", { method: "POST", headers: authHeaders() });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("PATCH /admin/lotteries/:id", () => {
+  it("タイトル・店舗・締切・応募方法・応募URLを更新できる", async () => {
+    const id = await insertLottery({ applicationEndDate: "2026-08-06" });
+
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({
+        productNameRaw: "修正後のタイトル",
+        storeNameRaw: "修正後の店舗",
+        applicationEndAt: "2026-08-07T15:00:00.000Z",
+        applicationMethod: "アプリから応募",
+        applicationUrl: "https://example.com/apply",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      lottery: {
+        productNameRaw: string;
+        storeNameRaw: string;
+        applicationEndAt: string;
+        applicationEndDate: string | null;
+        applicationMethod: string;
+        applicationUrl: string;
+        resolvedApplicationUrl: string;
+      };
+    };
+    expect(body.lottery.productNameRaw).toBe("修正後のタイトル");
+    expect(body.lottery.storeNameRaw).toBe("修正後の店舗");
+    expect(body.lottery.applicationEndAt).toBe("2026-08-07T15:00:00.000Z");
+    // _atを管理者が設定したら、AI抽出由来の日付のみ値はクリアされる
+    expect(body.lottery.applicationEndDate).toBeNull();
+    expect(body.lottery.applicationMethod).toBe("アプリから応募");
+    expect(body.lottery.applicationUrl).toBe("https://example.com/apply");
+    // resolvedApplicationUrlが優先表示されるため、両方に反映されている必要がある
+    expect(body.lottery.resolvedApplicationUrl).toBe("https://example.com/apply");
+  });
+
+  it("フィールドを未指定のままにすると既存値を保持する", async () => {
+    const id = await insertLottery({ storeNameRaw: "元の店舗" });
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ productNameRaw: "タイトルだけ変更" }),
+    });
+    const body = (await res.json()) as { lottery: { storeNameRaw: string } };
+    expect(body.lottery.storeNameRaw).toBe("元の店舗");
+  });
+
+  it("空文字を送るとnull（クリア）として扱われる", async () => {
+    const id = await insertLottery({ applicationMethod: "元の応募方法" });
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ applicationMethod: "" }),
+    });
+    const body = (await res.json()) as { lottery: { applicationMethod: string | null } };
+    expect(body.lottery.applicationMethod).toBeNull();
+  });
+
+  it("不正な日時形式は422 VALIDATION_ERROR", async () => {
+    const id = await insertLottery();
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ applicationEndAt: "not-a-date" }),
+    });
+    expect(res.status).toBe(422);
+  });
+});
+
+describe("POST /admin/lotteries/:id/image", () => {
+  function fakeBucket() {
+    const store = new Map<string, { body: Uint8Array; contentType: string }>();
+    return {
+      async put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
+        store.set(key, { body: new Uint8Array(value), contentType: options?.httpMetadata?.contentType ?? "" });
+      },
+      async get(key: string) {
+        const entry = store.get(key);
+        if (!entry) return null;
+        return { body: entry.body, httpMetadata: { contentType: entry.contentType } };
+      },
+    } as unknown as Env["LOTTERY_IMAGES"];
+  }
+
+  it("画像をアップロードするとimageUrlが保存され、/images/:keyで取得できる", async () => {
+    const id = await insertLottery();
+    const bucket = fakeBucket();
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+
+    const uploadRes = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/png", ...authHeaders() }, body: bytes },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+    expect(uploadRes.status).toBe(200);
+    const uploadBody = (await uploadRes.json()) as { imageUrl: string };
+    expect(uploadBody.imageUrl).toMatch(new RegExp(`^http://[^/]+/images/${id}-\\d+\\.png$`));
+
+    const imagePath = new URL(uploadBody.imageUrl).pathname;
+    const imageRes = await app.request(imagePath, {}, { LOTTERY_IMAGES: bucket } as Partial<Env>);
+    expect(imageRes.status).toBe(200);
+    expect(imageRes.headers.get("Content-Type")).toBe("image/png");
+
+    const detailRes = await app.request(`/admin/lotteries/${id}`, { headers: authHeaders() });
+    const detail = (await detailRes.json()) as { lottery: { imageUrl: string } };
+    expect(detail.lottery.imageUrl).toBe(uploadBody.imageUrl);
+  });
+
+  it("対応していない形式（例: image/gif）は422 VALIDATION_ERROR", async () => {
+    const id = await insertLottery();
+    const res = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/gif", ...authHeaders() }, body: new Uint8Array([1]) },
+      { LOTTERY_IMAGES: fakeBucket() } as Partial<Env>
+    );
+    expect(res.status).toBe(422);
+  });
+
+  it("バケット未設定なら500 CONFIG_ERROR", async () => {
+    const id = await insertLottery();
+    const res = await app.request(`/admin/lotteries/${id}/image`, {
+      method: "POST",
+      headers: { "Content-Type": "image/png", ...authHeaders() },
+      body: new Uint8Array([1]),
+    });
+    expect(res.status).toBe(500);
+  });
+});

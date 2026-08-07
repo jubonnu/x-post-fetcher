@@ -502,3 +502,98 @@ export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<Lot
 
   return { lottery: rows[0], sources, fieldHistory };
 }
+
+export interface ListLotteriesForAdminOptions {
+  verificationStatus?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/**
+ * 管理画面（Phase 7）の一覧用。`listLotteriesByOffset`（内部review-items用）と異なり、
+ * rejected済みも含めた全件を対象にする（管理者は却下済みも見て再承認できる必要があるため）。
+ * 論理削除済み（`lifecycleStatus !== 'active'`）は対象外にする。
+ */
+export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAdminOptions = {}): Promise<ListLotteriesByOffsetResult> {
+  const { verificationStatus, limit = 20, offset = 0 } = opts;
+
+  const conditions = [eq(lotteries.lifecycleStatus, "active"), ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : [])];
+  const where = and(...conditions);
+
+  const [rows, [{ total }]] = await Promise.all([
+    db.select().from(lotteries).where(where).orderBy(desc(lotteries.createdAt)).limit(Math.min(limit, 100)).offset(offset),
+    db.select({ total: count() }).from(lotteries).where(where),
+  ]);
+
+  return { lotteries: rows, total };
+}
+
+/** 管理画面からの承認。`approvedBy`には管理者のメールアドレスを記録する（監査用）。 */
+export async function approveLotteryByAdmin(db: DbOrTx, id: number, approvedBy: string): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .update(lotteries)
+    .set({ verificationStatus: "approved", approvedBy, approvedAt: now, updatedAt: now })
+    .where(eq(lotteries.id, id));
+}
+
+/** 管理画面からの却下。`rejectedReason`は任意（未指定ならnull）。 */
+export async function rejectLotteryByAdmin(db: DbOrTx, id: number, reason: string | null): Promise<void> {
+  const now = new Date().toISOString();
+  await db
+    .update(lotteries)
+    .set({ verificationStatus: "rejected", rejectedReason: reason, rejectedAt: now, updatedAt: now })
+    .where(eq(lotteries.id, id));
+}
+
+export interface AdminLotteryUpdateInput {
+  productNameRaw?: string | null;
+  storeNameRaw?: string | null;
+  applicationEndAt?: string | null;
+  resultAnnouncementAt?: string | null;
+  purchaseDeadlineAt?: string | null;
+  applicationMethod?: string | null;
+  applicationUrl?: string | null;
+  imageUrl?: string | null;
+}
+
+/**
+ * 管理画面からのフィールド編集（Phase 7）。`undefined`のキーは更新しない（部分更新）、
+ * `null`は明示的なクリアとして扱う。`applicationEndAt`/`resultAnnouncementAt`を管理者が
+ * 設定した場合、AI抽出由来の日付のみ値（`_date`）は表示上使われなくなるが、監査のため
+ * 残しておいても実害が無い一方、混乱を避けるため明示的にクリアする。
+ */
+export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminLotteryUpdateInput): Promise<void> {
+  const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+  if (input.productNameRaw !== undefined) patch.productNameRaw = input.productNameRaw;
+  if (input.storeNameRaw !== undefined) patch.storeNameRaw = input.storeNameRaw;
+  if (input.applicationMethod !== undefined) patch.applicationMethod = input.applicationMethod;
+  if (input.purchaseDeadlineAt !== undefined) patch.purchaseDeadlineAt = input.purchaseDeadlineAt;
+  if (input.imageUrl !== undefined) patch.imageUrl = input.imageUrl;
+
+  if (input.applicationEndAt !== undefined) {
+    patch.applicationEndAt = input.applicationEndAt;
+    if (input.applicationEndAt !== null) {
+      patch.applicationEndDate = null;
+      patch.applicationEndPrecision = "exact";
+    }
+  }
+  if (input.resultAnnouncementAt !== undefined) {
+    patch.resultAnnouncementAt = input.resultAnnouncementAt;
+    if (input.resultAnnouncementAt !== null) {
+      patch.resultAnnouncementDate = null;
+      patch.resultAnnouncementPrecision = "exact";
+    }
+  }
+  if (input.applicationUrl !== undefined) {
+    // resolvedApplicationUrlが優先表示されるため（`resolvedApplicationUrl ?? applicationUrl`）、
+    // 管理者の修正が確実に反映されるよう両方へ書き込む。自動解決の追跡情報は無効化する。
+    patch.applicationUrl = input.applicationUrl;
+    patch.resolvedApplicationUrl = input.applicationUrl;
+    patch.applicationUrlHttpStatus = null;
+    patch.urlResolvedAt = null;
+  }
+
+  await db.update(lotteries).set(patch).where(eq(lotteries.id, id));
+}

@@ -127,6 +127,13 @@
       "when": 1785610009971,
       "tag": "0017_keen_red_hulk",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786073488354,
+      "tag": "0018_open_jocasta",
+      "breakpoints": true
     }
   ]
 }

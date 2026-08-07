@@ -10,6 +10,13 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = ["0 * * * *"]
 
+# --- 管理画面（Phase 7）の商品画像保存用R2バケット。`GET /images/:key`で配信する
+#     （バケット自体は非公開のまま、Worker経由でのみ読み出す。公開URL発行やCORS設定が
+#     不要になるため、r2.dev Public Access等の追加のダッシュボード操作を要さない）。
+[[r2_buckets]]
+binding = "LOTTERY_IMAGES"
+bucket_name = "cardhub-lottery-images"
+
 # --- シークレット（`wrangler secret put <NAME>` で登録。ここには値を書かない） ---
 #   INGEST_TOKEN        … /ingest の Bearer トークン（/internal/* の内部APIもこれを流用）
 #   TURSO_DATABASE_URL  … libsql://<db>.turso.io
@@ -60,3 +67,7 @@ crons = ["0 * * * *"]
 #     このブロック自体はまだ実デプロイしていない（scaffoldingのみ）。
 [env.staging]
 name = "x-post-ingest-staging"
+
+[[env.staging.r2_buckets]]
+binding = "LOTTERY_IMAGES"
+bucket_name = "cardhub-lottery-images-staging"
