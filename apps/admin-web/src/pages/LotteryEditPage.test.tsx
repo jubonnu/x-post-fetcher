@@ -113,6 +113,43 @@ describe("LotteryEditPage", () => {
     });
   });
 
+  it("画像削除ボタンで確認後にDELETEを呼び、プレビューが消える", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const apiRequestSpy = vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
+      if (path === "/admin/lotteries/42" && !options) {
+        return { lottery: makeLottery({ imageUrl: "https://example.com/images/42-123.png" }), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+      }
+      if (path === "/admin/lotteries/42/image" && options?.method === "DELETE") {
+        return { ok: true };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    renderEditPage();
+    await screen.findByDisplayValue("テスト商品");
+
+    fireEvent.click(screen.getByRole("button", { name: "画像を削除" }));
+
+    await waitFor(() => expect(apiRequestSpy).toHaveBeenCalledWith("/admin/lotteries/42/image", { method: "DELETE" }));
+    await waitFor(() => expect(document.querySelector(".image-upload-preview")?.tagName).toBe("DIV"));
+  });
+
+  it("画像削除ボタンで確認をキャンセルするとDELETEを呼ばない", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+    const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
+      lottery: makeLottery({ imageUrl: "https://example.com/images/42-123.png" }),
+      sources: [],
+      fieldHistory: [],
+    } satisfies LotteryDetailResponse);
+
+    renderEditPage();
+    await screen.findByDisplayValue("テスト商品");
+
+    fireEvent.click(screen.getByRole("button", { name: "画像を削除" }));
+
+    expect(apiRequestSpy).not.toHaveBeenCalledWith("/admin/lotteries/42/image", expect.objectContaining({ method: "DELETE" }));
+  });
+
   it("承認するボタンでPOST /admin/lotteries/:id/approveを呼び、一覧を再取得する", async () => {
     const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
       lottery: makeLottery(),

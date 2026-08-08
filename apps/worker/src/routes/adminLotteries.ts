@@ -55,6 +55,17 @@ function parseId(idParam: string | undefined): number | null {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+/** `${origin}/images/${key}`形式のURLからR2のオブジェクトキーを取り出す。形式が違えばnull。 */
+function extractImageKey(imageUrl: string): string | null {
+  try {
+    const path = new URL(imageUrl).pathname;
+    const match = /^\/images\/(.+)$/.exec(path);
+    return match ? decodeURIComponent(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function parseJsonBody(c: { req: { json: () => Promise<unknown> } }): Promise<unknown | null> {
   try {
     return await c.req.json();
@@ -174,5 +185,36 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
     const imageUrl = `${origin}/images/${key}`;
     await updateLotteryByAdmin(db, id, { imageUrl });
     return c.json({ imageUrl });
+  });
+
+  app.delete("/admin/lotteries/:id/image", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+
+    if (!detail.lottery.imageUrl) {
+      // 元々画像が無い場合も、呼び出し側から見れば「画像が無い状態」という結果は
+      // 変わらないため冪等に成功とする（削除ボタンの二重クリック等を気にしなくてよい）。
+      return c.json({ ok: true });
+    }
+
+    const bucket = c.get("env").LOTTERY_IMAGES;
+    if (!bucket) return apiErrorJson(c, new ApiError("CONFIG_ERROR", "画像保存先が設定されていません"));
+
+    const key = extractImageKey(detail.lottery.imageUrl);
+    if (key) {
+      // R2からの削除が失敗しても、DB側のimageUrlクリアは進める（孤立オブジェクトが
+      // 残るより、管理画面上「画像なし」に見えているのにアプリには表示され続ける方が
+      // 実害が大きいため）。R2側のエラーはログに残すのみでレスポンスには影響させない。
+      await bucket.delete(key).catch((e: unknown) => {
+        console.error(JSON.stringify({ event: "admin_image_delete_failed", lotteryId: id, key, message: e instanceof Error ? e.message : String(e) }));
+      });
+    }
+
+    await updateLotteryByAdmin(db, id, { imageUrl: null });
+    return c.json({ ok: true });
   });
 }

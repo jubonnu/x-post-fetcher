@@ -37,6 +37,7 @@ export function LotteryEditPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [deletingImage, setDeletingImage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
@@ -109,6 +110,20 @@ export function LotteryEditPage() {
     }
   }
 
+  async function handleImageDelete() {
+    if (!window.confirm("画像を削除しますか？")) return;
+    setDeletingImage(true);
+    setError(null);
+    try {
+      await apiRequest(`/admin/lotteries/${id}/image`, { method: "DELETE" });
+      setLottery((prev) => (prev ? { ...prev, imageUrl: null } : prev));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "画像の削除に失敗しました");
+    } finally {
+      setDeletingImage(false);
+    }
+  }
+
   async function handleApproveOrReject(action: "approve" | "reject") {
     if (action === "reject") {
       const reason = window.prompt("却下理由（任意）");
@@ -159,6 +174,11 @@ export function LotteryEditPage() {
           }}
         />
         {uploadingImage ? <p className="muted">アップロード中…</p> : null}
+        {lottery.imageUrl ? (
+          <button type="button" className="danger" style={{ marginTop: 8 }} disabled={deletingImage} onClick={() => void handleImageDelete()}>
+            {deletingImage ? "削除中…" : "画像を削除"}
+          </button>
+        ) : null}
       </div>
 
       <form className="card" onSubmit={handleSave}>

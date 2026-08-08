@@ -215,21 +215,25 @@ describe("PATCH /admin/lotteries/:id", () => {
   });
 });
 
-describe("POST /admin/lotteries/:id/image", () => {
-  function fakeBucket() {
-    const store = new Map<string, { body: Uint8Array; contentType: string }>();
-    return {
-      async put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
-        store.set(key, { body: new Uint8Array(value), contentType: options?.httpMetadata?.contentType ?? "" });
-      },
-      async get(key: string) {
-        const entry = store.get(key);
-        if (!entry) return null;
-        return { body: entry.body, httpMetadata: { contentType: entry.contentType } };
-      },
-    } as unknown as Env["LOTTERY_IMAGES"];
-  }
+function fakeBucket() {
+  const store = new Map<string, { body: Uint8Array; contentType: string }>();
+  return {
+    async put(key: string, value: ArrayBuffer, options?: { httpMetadata?: { contentType?: string } }) {
+      store.set(key, { body: new Uint8Array(value), contentType: options?.httpMetadata?.contentType ?? "" });
+    },
+    async get(key: string) {
+      const entry = store.get(key);
+      if (!entry) return null;
+      return { body: entry.body, httpMetadata: { contentType: entry.contentType } };
+    },
+    async delete(key: string) {
+      store.delete(key);
+    },
+    __store: store,
+  } as unknown as Env["LOTTERY_IMAGES"] & { __store: Map<string, unknown> };
+}
 
+describe("POST /admin/lotteries/:id/image", () => {
   it("画像をアップロードするとimageUrlが保存され、/images/:keyで取得できる", async () => {
     const id = await insertLottery();
     const bucket = fakeBucket();
@@ -271,6 +275,66 @@ describe("POST /admin/lotteries/:id/image", () => {
       headers: { "Content-Type": "image/png", ...authHeaders() },
       body: new Uint8Array([1]),
     });
+    expect(res.status).toBe(500);
+  });
+});
+
+describe("DELETE /admin/lotteries/:id/image", () => {
+  it("画像を削除するとR2から消え、imageUrlがnullになる", async () => {
+    const id = await insertLottery();
+    const bucket = fakeBucket();
+
+    const uploadRes = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/png", ...authHeaders() }, body: new Uint8Array([1, 2, 3]) },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+    const uploadBody = (await uploadRes.json()) as { imageUrl: string };
+    const key = new URL(uploadBody.imageUrl).pathname.replace(/^\/images\//, "");
+    expect(bucket.__store.has(key)).toBe(true);
+
+    const deleteRes = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "DELETE", headers: authHeaders() },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+    expect(deleteRes.status).toBe(200);
+    expect(bucket.__store.has(key)).toBe(false);
+
+    const detailRes = await app.request(`/admin/lotteries/${id}`, { headers: authHeaders() });
+    const detail = (await detailRes.json()) as { lottery: { imageUrl: string | null } };
+    expect(detail.lottery.imageUrl).toBeNull();
+  });
+
+  it("元々画像が無い場合も冪等に200", async () => {
+    const id = await insertLottery();
+    const res = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "DELETE", headers: authHeaders() },
+      { LOTTERY_IMAGES: fakeBucket() } as Partial<Env>
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("存在しないidは404", async () => {
+    const res = await app.request(
+      `/admin/lotteries/999999/image`,
+      { method: "DELETE", headers: authHeaders() },
+      { LOTTERY_IMAGES: fakeBucket() } as Partial<Env>
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("画像がある状態でバケット未設定なら500 CONFIG_ERROR", async () => {
+    const id = await insertLottery();
+    const bucket = fakeBucket();
+    await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/png", ...authHeaders() }, body: new Uint8Array([1]) },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+
+    const res = await app.request(`/admin/lotteries/${id}/image`, { method: "DELETE", headers: authHeaders() });
     expect(res.status).toBe(500);
   });
 });
