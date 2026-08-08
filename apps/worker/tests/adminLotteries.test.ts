@@ -72,6 +72,43 @@ describe("GET /admin/lotteries", () => {
     expect(body.items.some((i) => i.productNameRaw === "却下済み商品")).toBe(true);
     expect(body.items.every((i) => i.productNameRaw !== "承認済み商品")).toBe(true);
   });
+
+  it("excludeVerificationStatusesで指定した値以外（NULL含む）を取得できる（要確認タブ用）", async () => {
+    await insertLottery({ productNameRaw: "要確認A", verificationStatus: "extracted" });
+    await insertLottery({ productNameRaw: "要確認B（未設定）", verificationStatus: null });
+    await insertLottery({ productNameRaw: "承認済みは除外対象", verificationStatus: "approved" });
+    await insertLottery({ productNameRaw: "却下済みも除外対象", verificationStatus: "rejected" });
+
+    const res = await app.request("/admin/lotteries?excludeVerificationStatuses=approved,rejected", {
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { productNameRaw: string }[] };
+    const titles = body.items.map((i) => i.productNameRaw);
+    expect(titles).toContain("要確認A");
+    expect(titles).toContain("要確認B（未設定）");
+    expect(titles).not.toContain("承認済みは除外対象");
+    expect(titles).not.toContain("却下済みも除外対象");
+  });
+
+  it("limit/offsetで正しくページングできる（100件を超えても後続ページが取得できる）", async () => {
+    for (let i = 0; i < 105; i++) {
+      await insertLottery({ productNameRaw: `ページング商品${i}`, verificationStatus: "extracted" });
+    }
+
+    const page1 = await app.request("/admin/lotteries?limit=100&offset=0&verificationStatus=extracted", {
+      headers: authHeaders(),
+    });
+    const page1Body = (await page1.json()) as { items: unknown[]; total: number };
+    expect(page1Body.items).toHaveLength(100);
+    expect(page1Body.total).toBeGreaterThanOrEqual(105);
+
+    const page2 = await app.request("/admin/lotteries?limit=100&offset=100&verificationStatus=extracted", {
+      headers: authHeaders(),
+    });
+    const page2Body = (await page2.json()) as { items: unknown[] };
+    expect(page2Body.items.length).toBeGreaterThanOrEqual(5);
+  });
 });
 
 describe("POST /admin/lotteries/:id/approve, /reject", () => {

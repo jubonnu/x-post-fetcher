@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getTableColumns, inArray, ne, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db, DbOrTx } from "../db/client.ts";
@@ -505,6 +505,11 @@ export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<Lot
 
 export interface ListLotteriesForAdminOptions {
   verificationStatus?: string;
+  /**
+   * 指定した値**以外**（NULLも含む）を対象にする（管理画面の「要確認」タブ用）。
+   * `verificationStatus`と同時指定した場合はこちらを優先する。
+   */
+  excludeVerificationStatuses?: string[];
   limit?: number;
   offset?: number;
 }
@@ -513,11 +518,21 @@ export interface ListLotteriesForAdminOptions {
  * 管理画面（Phase 7）の一覧用。`listLotteriesByOffset`（内部review-items用）と異なり、
  * rejected済みも含めた全件を対象にする（管理者は却下済みも見て再承認できる必要があるため）。
  * 論理削除済み（`lifecycleStatus !== 'active'`）は対象外にする。
+ *
+ * ページネーション必須（Phase 7の初期実装ではlimit=100固定・offset未使用だったため、
+ * 100件を超えるデータでは「要確認」等のタブから古い抽選が一切見えなくなる不具合があった）。
  */
 export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAdminOptions = {}): Promise<ListLotteriesByOffsetResult> {
-  const { verificationStatus, limit = 20, offset = 0 } = opts;
+  const { verificationStatus, excludeVerificationStatuses, limit = 20, offset = 0 } = opts;
 
-  const conditions = [eq(lotteries.lifecycleStatus, "active"), ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : [])];
+  const conditions = [eq(lotteries.lifecycleStatus, "active")];
+  if (excludeVerificationStatuses && excludeVerificationStatuses.length > 0) {
+    // SQLのNOT INは対象列がNULLの行を（三値論理により）除外してしまうため、
+    // 「未設定（NULL）」も要確認扱いに含められるようISNULLを明示的にORする。
+    conditions.push(or(isNull(lotteries.verificationStatus), notInArray(lotteries.verificationStatus, excludeVerificationStatuses))!);
+  } else if (verificationStatus) {
+    conditions.push(eq(lotteries.verificationStatus, verificationStatus));
+  }
   const where = and(...conditions);
 
   const [rows, [{ total }]] = await Promise.all([

@@ -22,6 +22,11 @@ const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
 
 const listQuerySchema = z.object({
   verificationStatus: z.string().optional(),
+  // カンマ区切り（例: "approved,rejected"）。「要確認」タブ用——これ以外の値（NULL含む）を対象にする。
+  excludeVerificationStatuses: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined)),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -67,6 +72,7 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
   app.get("/admin/lotteries", requireAdminAuth, async (c) => {
     const parsed = listQuerySchema.safeParse({
       verificationStatus: c.req.query("verificationStatus") ?? undefined,
+      excludeVerificationStatuses: c.req.query("excludeVerificationStatuses") ?? undefined,
       limit: c.req.query("limit") ?? undefined,
       offset: c.req.query("offset") ?? undefined,
     });

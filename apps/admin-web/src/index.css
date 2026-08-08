@@ -233,6 +233,14 @@ button:disabled {
   color: var(--warn-text);
 }
 
+.pagination-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 18px;
+}
+
 .image-upload-preview {
   width: 120px;
   height: 120px;

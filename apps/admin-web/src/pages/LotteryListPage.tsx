@@ -14,7 +14,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "rejected", label: "却下済み" },
 ];
 
-const LIST_LIMIT = 100;
+const PAGE_SIZE = 20;
 
 function displayTitle(item: LotteryRow): string {
   return item.productNameRaw?.trim() || item.normalizedProductName?.trim() || "商品名未確認";
@@ -24,9 +24,18 @@ function displayStore(item: LotteryRow): string {
   return item.storeNameRaw?.trim() || item.normalizedStoreName?.trim() || "店舗情報なし";
 }
 
+/** タブごとのサーバー側フィルタ条件をクエリ文字列へ変換する。 */
+function filterQueryFor(tab: Tab): string {
+  if (tab === "approved") return "verificationStatus=approved";
+  if (tab === "rejected") return "verificationStatus=rejected";
+  if (tab === "needsReview") return "excludeVerificationStatuses=approved,rejected";
+  return "";
+}
+
 export function LotteryListPage() {
   const { admin, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("needsReview");
+  const [page, setPage] = useState(0);
   const [items, setItems] = useState<LotteryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -37,21 +46,27 @@ export function LotteryListPage() {
     setLoading(true);
     setError(null);
     try {
-      const query = tab === "approved" ? "?verificationStatus=approved&limit=" + LIST_LIMIT : tab === "rejected" ? "?verificationStatus=rejected&limit=" + LIST_LIMIT : `?limit=${LIST_LIMIT}`;
+      const filterQuery = filterQueryFor(tab);
+      const offset = page * PAGE_SIZE;
+      const query = `?${filterQuery ? `${filterQuery}&` : ""}limit=${PAGE_SIZE}&offset=${offset}`;
       const res = await apiRequest<LotteryListResponse>(`/admin/lotteries${query}`);
-      const filtered = tab === "needsReview" ? res.items.filter((i) => i.verificationStatus !== "approved" && i.verificationStatus !== "rejected") : res.items;
-      setItems(filtered);
-      setTotal(tab === "needsReview" ? filtered.length : res.total);
+      setItems(res.items);
+      setTotal(res.total);
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "一覧の取得に失敗しました");
     } finally {
       setLoading(false);
     }
-  }, [tab]);
+  }, [tab, page]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  function selectTab(next: Tab) {
+    setTab(next);
+    setPage(0);
+  }
 
   async function handleApprove(id: number) {
     setBusyId(id);
@@ -79,6 +94,10 @@ export function LotteryListPage() {
     }
   }
 
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const rangeStart = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const rangeEnd = Math.min(total, (page + 1) * PAGE_SIZE);
+
   return (
     <div className="page">
       <div className="header-row">
@@ -94,7 +113,7 @@ export function LotteryListPage() {
 
       <div className="filter-tabs">
         {TABS.map((t) => (
-          <button key={t.key} type="button" className={tab === t.key ? "active" : ""} onClick={() => setTab(t.key)}>
+          <button key={t.key} type="button" className={tab === t.key ? "active" : ""} onClick={() => selectTab(t.key)}>
             {t.label}
           </button>
         ))}
@@ -106,7 +125,7 @@ export function LotteryListPage() {
       {!loading && items.length === 0 ? <p className="muted">該当する抽選はありません</p> : null}
 
       <p className="muted" style={{ marginBottom: 10 }}>
-        {total.toLocaleString()}件{total >= LIST_LIMIT ? `（最大${LIST_LIMIT}件まで表示）` : ""}
+        {total.toLocaleString()}件中 {rangeStart}〜{rangeEnd}件目
       </p>
 
       <div className="lottery-list">
@@ -138,6 +157,25 @@ export function LotteryListPage() {
           </div>
         ))}
       </div>
+
+      {total > PAGE_SIZE ? (
+        <div className="pagination-row">
+          <button type="button" className="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+            前へ
+          </button>
+          <span className="muted">
+            {page + 1} / {pageCount}
+          </span>
+          <button
+            type="button"
+            className="secondary"
+            disabled={page + 1 >= pageCount}
+            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+          >
+            次へ
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
