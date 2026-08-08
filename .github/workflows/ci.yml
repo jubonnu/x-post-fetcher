@@ -1,0 +1,66 @@
+name: ci
+
+# push・PR時にtypecheck/lint/testを自動実行する。
+# ワークスペースごとにジョブを分け、1つが落ちても他の結果が見える・並列で速く終わるようにする。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run typecheck -w @x-post/worker
+      - run: npm run lint -w @x-post/worker
+      - run: npm run test -w @x-post/worker
+
+  scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run typecheck -w @x-post/scraper
+      - run: npm run lint -w @x-post/scraper
+      - run: npm run test -w @x-post/scraper
+
+  shared:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run typecheck -w @x-post/shared
+      - run: npm run lint -w @x-post/shared
+      - run: npm run test -w @x-post/shared
+
+  admin-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run typecheck -w @x-post/admin-web
+      - run: npm run lint -w @x-post/admin-web
+      - run: npm run test -w @x-post/admin-web
+      - run: npm run build -w @x-post/admin-web
