@@ -59,17 +59,27 @@ export interface StatisticsSummary {
   pendingResultCount: number;
   /** 当選確定後、購入済みとして記録された試行数。 */
   purchasedCount: number;
-  /** 当選確定後、購入を見送ったとして記録された試行数（応募自体を見送った件数ではない）。 */
+  /** 当選確定後、購入を見送ったとして記録された試行数（「購入見送り」。応募自体を見送った件数ではない）。 */
   skippedCount: number;
+  /**
+   * 応募自体を見送った（`planned`/`unknown → skipped`）件数（「応募見送り」）。
+   * `skippedCount`（購入見送り）とは別軸で数える。`docs/known-gaps.md`で指摘されていた
+   * 「skippedステータスの2つの経路を区別できない」問題への対応（2026-08）。
+   * `reconstructAttempts`側の仕様上、応募を経由しない見送りは試行として記録されない
+   * （`services/lotteryAttempts.ts`のルール6）ため、`attempts`に対応する試行が無い
+   * `status === "skipped"`の保存済み抽選を数えることで判定する。
+   */
+  applicationSkippedCount: number;
   /** wonCount / (wonCount + lostCount)。分母0（結果が出た件が無い）ならnull（「計算不可」）。 */
   winRate: number | null;
 }
 
 export async function getStatisticsSummary(db: DbOrTx, userId: number): Promise<StatisticsSummary> {
-  // savedCount/plannedCount/notAppliedCountは「現在保存している抽選の状態」を表す
-  // スナップショット値であり、応募試行の集計対象ではないため従来通りuser_lotteries.statusから出す。
+  // savedCount/plannedCount/notAppliedCount/applicationSkippedCountは「現在保存している
+  // 抽選の状態」を表すスナップショット値であり、応募試行の集計対象ではないため
+  // 従来通りuser_lotteries.status（idも含む）から出す。
   const savedRows = await db
-    .select({ status: userLotteries.status })
+    .select({ id: userLotteries.id, status: userLotteries.status })
     .from(userLotteries)
     .where(and(eq(userLotteries.userId, userId), isNull(userLotteries.deletedAt)));
 
@@ -77,6 +87,7 @@ export async function getStatisticsSummary(db: DbOrTx, userId: number): Promise<
   const wonCount = attempts.filter((a) => a.result === "won").length;
   const lostCount = attempts.filter((a) => a.result === "lost").length;
   const pendingResultCount = attempts.filter((a) => a.result === null).length;
+  const attemptedLotteryIds = new Set(attempts.map((a) => a.lotteryId));
 
   return {
     savedCount: savedRows.length,
@@ -88,6 +99,7 @@ export async function getStatisticsSummary(db: DbOrTx, userId: number): Promise<
     pendingResultCount,
     purchasedCount: attempts.filter((a) => a.purchaseState === "purchased").length,
     skippedCount: attempts.filter((a) => a.purchaseState === "skipped").length,
+    applicationSkippedCount: savedRows.filter((r) => r.status === "skipped" && !attemptedLotteryIds.has(r.id)).length,
     winRate: computeWinRate(attempts),
   };
 }

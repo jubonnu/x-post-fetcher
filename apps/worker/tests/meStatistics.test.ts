@@ -153,7 +153,30 @@ describe("GET /me/statistics/summary", () => {
     // skippedCountは「当選確定後の購入見送り」のみを数える（応募自体の見送りは含まない）ため、
     // [5]（unknown→skippedで一度も応募していない）は0件になる
     expect(body.skippedCount).toBe(0);
+    // applicationSkippedCountは逆に「応募自体を見送った」件数のみを数える。[5]がここに該当する。
+    expect(body.applicationSkippedCount).toBe(1);
     expect(body.winRate).toBeCloseTo(2 / 3);
+  });
+
+  it("応募見送り（未応募のままskipped）と購入見送り（won経由のskipped）を区別して集計する", async () => {
+    const { accessToken, publicUserId } = await loginAs("sub-stats-skip-kinds", "device-1");
+    await makePremium(publicUserId);
+
+    const [applicationSkip, purchaseSkip] = await Promise.all([insertLottery(), insertLottery()]);
+
+    // 応募見送り: 一度も応募せずunknown→skipped
+    await putStatus(accessToken, applicationSkip, "skipped");
+
+    // 購入見送り: applied→won→skipped
+    const v = (await putStatus(accessToken, purchaseSkip, "applied")).serverVersion;
+    const v2 = (await putStatus(accessToken, purchaseSkip, "won", v)).serverVersion;
+    await putStatus(accessToken, purchaseSkip, "skipped", v2);
+
+    const res = await app.request("/me/statistics/summary", { headers: authHeaders(accessToken) });
+    const body = await res.json();
+
+    expect(body.applicationSkippedCount).toBe(1);
+    expect(body.skippedCount).toBe(1);
   });
 
   it("結果が1件も出ていない場合、当選率はnull（計算不可）", async () => {
