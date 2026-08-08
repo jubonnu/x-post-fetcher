@@ -58,7 +58,9 @@ export function registerReview(app: Hono<AppEnv>): void {
     let body: { approvedBy?: string } = {};
     try {
       body = (await c.req.json().catch(() => ({}))) as typeof body;
-    } catch {}
+    } catch {
+      // 不正なJSON/空bodyは許容する（このエンドポイントの全フィールドが任意項目のため、パース失敗時は空objectのまま続行する）
+    }
 
     const now = new Date().toISOString();
     await db
@@ -85,7 +87,9 @@ export function registerReview(app: Hono<AppEnv>): void {
     let body: { reason?: string; rejectedBy?: string } = {};
     try {
       body = (await c.req.json().catch(() => ({}))) as typeof body;
-    } catch {}
+    } catch {
+      // 不正なJSON/空bodyは許容する（このエンドポイントの全フィールドが任意項目のため、パース失敗時は空objectのまま続行する）
+    }
 
     const now = new Date().toISOString();
     await db

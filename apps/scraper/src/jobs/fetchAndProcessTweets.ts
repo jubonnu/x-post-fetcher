@@ -68,7 +68,14 @@ async function main(): Promise<void> {
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
-      const json: any = await res.json().catch(() => ({}));
+      interface IngestResponse {
+        ok?: boolean;
+        error?: string;
+        action?: string;
+        sourcePostId?: number;
+        analysis?: { action?: string; lotteryResults?: unknown[] };
+      }
+      const json: IngestResponse = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) {
         counts.failed++;
         // 構造化ログ（エラー）
@@ -82,7 +89,8 @@ async function main(): Promise<void> {
           })
         );
       } else {
-        counts[json.action] = (counts[json.action] ?? 0) + 1;
+        const action = json.action ?? "unknown";
+        counts[action] = (counts[action] ?? 0) + 1;
         // 構造化ログ（正常）: rawHtml / cleanedHtml は含まない
         console.log(
           JSON.stringify({

@@ -348,7 +348,6 @@ describe("cleanedHtml", () => {
   });
 
   it("12f. rawHtml は元の img/class/style を保持する", () => {
-    const post = parseTweetArticle(fixture("single-product.html"));
     // image-react.html には img が含まれ rawHtml に残る
     const withImg = parseTweetArticle(fixture("image-react.html"));
     expect(withImg!.rawHtml).toContain("pbs.twimg.com/media");

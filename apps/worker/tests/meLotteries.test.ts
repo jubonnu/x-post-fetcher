@@ -8,7 +8,6 @@ import { migrate } from "drizzle-orm/libsql/migrator";
 import { createDb } from "../src/db/client.node.ts";
 import { createApp } from "../src/app.ts";
 import { lotteries, userLotteryStatusHistory } from "../src/db/schema.ts";
-import { eq } from "drizzle-orm";
 import { __setAppleJwksResolverForTests } from "../src/auth/apple.ts";
 import { __resetRateLimitForTests } from "../src/auth/rateLimit.ts";
 import { TEST_APPLE_CLIENT_ID, createAppleTestKeyPair, makeAppleJwksResolver, signTestAppleToken } from "./helpers/appleTestKit.ts";

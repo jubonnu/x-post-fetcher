@@ -11,7 +11,7 @@ import { eq } from "drizzle-orm";
 import { exportPKCS8, generateKeyPair } from "jose";
 import { createDb } from "../src/db/client.node.ts";
 import { createApp } from "../src/app.ts";
-import { accountDeletionRequests, userIdentities, users } from "../src/db/schema.ts";
+import { accountDeletionRequests, userIdentities } from "../src/db/schema.ts";
 import { __setAppleJwksResolverForTests } from "../src/auth/apple.ts";
 import { __resetRateLimitForTests } from "../src/auth/rateLimit.ts";
 import { signAccessToken } from "../src/auth/accessToken.ts";

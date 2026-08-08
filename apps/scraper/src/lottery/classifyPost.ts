@@ -90,7 +90,7 @@ export function classifyPost(bodyText: string): Classification {
   const isLotteryInformation = LOTTERY_POST_TYPES.has(postType);
 
   // 信頼度: 抽選シグナル数と分類の確度から素朴に算出
-  let confidenceScore = 0.3;
+  let confidenceScore: number;
   if (postType === "unrelated") confidenceScore = 0.2;
   else if (postType === "lottery_preparation") confidenceScore = 0.7;
   else if (isLotteryInformation) confidenceScore = Math.min(0.95, 0.5 + lotterySignalCount * 0.15);

@@ -111,7 +111,7 @@ describe("backfillProductsFromLotteries", () => {
     });
 
     const lottery = await insertLottery({ productNameRaw: "既存商品(新規投稿)", normalizedProductName: "既存商品扱い", normalizerVersion: "v1" });
-    const result = await backfillProductsFromLotteries(db);
+    await backfillProductsFromLotteries(db);
 
     const link = await db.select().from(lotteryProducts).where(eq(lotteryProducts.lotteryId, lottery.id));
     expect(link[0].productId).toBe(existingProduct.id);
@@ -125,7 +125,7 @@ describe("backfillProductsFromLotteries", () => {
     await backfillProductsFromLotteries(db);
 
     const [linkBefore] = await db.select().from(lotteryProducts).where(eq(lotteryProducts.lotteryId, lottery.id));
-    const result = await backfillProductsFromLotteries(db);
+    await backfillProductsFromLotteries(db);
     const linksAfter = await db.select().from(lotteryProducts).where(eq(lotteryProducts.lotteryId, lottery.id));
 
     expect(linksAfter).toHaveLength(1);

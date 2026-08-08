@@ -5,14 +5,14 @@
  * 3. SSRF 対策（resolveUrl）
  * 4. GET /internal/jobs/next, POST /internal/jobs/:id/complete, POST /internal/jobs/:id/fail
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { eq } from "drizzle-orm";
 import { createDb } from "../src/db/client.node.ts";
 import { createApp } from "../src/app.ts";
-import { lotteries, lotterySources, processingJobs, sourcePosts } from "../src/db/schema.ts";
+import { lotteries, processingJobs, sourcePosts } from "../src/db/schema.ts";
 import { syncLotteriesFromAnalysis, toLotteryRow } from "../src/repositories/lotteryRepository.ts";
 import { resolveUrl } from "../src/services/resolveUrl.ts";
 import type { ExtractedLottery } from "@x-post/shared";

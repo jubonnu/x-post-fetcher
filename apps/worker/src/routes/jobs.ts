@@ -139,7 +139,9 @@ export function registerJobs(app: Hono<AppEnv>): void {
     let body: { error?: string } = {};
     try {
       body = (await c.req.json().catch(() => ({}))) as typeof body;
-    } catch {}
+    } catch {
+      // 不正なJSON/空bodyは許容する（このエンドポイントの全フィールドが任意項目のため、パース失敗時は空objectのまま続行する）
+    }
 
     const db = c.get("db");
     const rows = await db

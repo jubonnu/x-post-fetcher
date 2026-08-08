@@ -35,17 +35,18 @@ export interface RawPost {
 /** innerText 相当のテキスト抽出（ブロック要素/BR で改行、img は alt=絵文字を採用） */
 function extractText(el: Element): string {
   let text = "";
-  el.childNodes.forEach((n: any) => {
+  el.childNodes.forEach((n) => {
     if (n.nodeType === 3) {
       text += n.textContent ?? "";
     } else if (n.nodeType === 1) {
-      const tag = (n.tagName as string).toUpperCase();
+      const element = n as Element;
+      const tag = element.tagName.toUpperCase();
       if (tag === "BR") {
         text += "\n";
       } else if (tag === "IMG") {
-        text += n.getAttribute("alt") ?? "";
+        text += element.getAttribute("alt") ?? "";
       } else {
-        const inner = extractText(n as Element);
+        const inner = extractText(element);
         if (tag === "DIV" || tag === "P") text += inner + "\n";
         else text += inner;
       }
@@ -68,7 +69,7 @@ function buildCleanedHtml(article: Element): string {
 
   // 不要属性を除去（class / style / id / aria-* / on* / tabindex）
   for (const el of Array.from(clone.querySelectorAll("*")) as Element[]) {
-    const names: string[] = (el as any).getAttributeNames?.() ?? [];
+    const names: string[] = (el as HTMLElement).getAttributeNames?.() ?? [];
     for (const name of names) {
       if (
         name === "class" ||
@@ -83,7 +84,7 @@ function buildCleanedHtml(article: Element): string {
     }
   }
 
-  return (clone as any).outerHTML;
+  return (clone as HTMLElement).outerHTML;
 }
 
 export function parseTweetArticle(html: string): RawPost | null {
@@ -91,7 +92,7 @@ export function parseTweetArticle(html: string): RawPost | null {
   const article = document.querySelector('article[data-testid="tweet"], article[data-tweet-id]');
   if (!article) return null;
 
-  const rawHtml = (article as any).outerHTML as string;
+  const rawHtml = (article as HTMLElement).outerHTML;
   const cleanedHtml = buildCleanedHtml(article);
 
   if (article.getAttribute("data-testid") === "tweet") {
@@ -209,7 +210,7 @@ function collectLinks(article: Element): ExternalLink[] {
 
     if (seen.has(effectiveHref)) continue;
     seen.add(effectiveHref);
-    links.push({ href: effectiveHref, text: ((a as any).textContent ?? "").trim() });
+    links.push({ href: effectiveHref, text: (a.textContent ?? "").trim() });
   }
   return links;
 }
