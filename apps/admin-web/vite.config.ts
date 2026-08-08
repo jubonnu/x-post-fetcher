@@ -14,5 +14,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
+    // テストは`.env`ファイル（gitignore対象、開発者のローカル環境にしか無い）の有無に
+    // 依存してはいけない。CI（.envが存在しない）でVITE_API_BASE_URL未設定エラーになり、
+    // 認証まわりのテストが軒並み失敗していたため、テスト専用の値をここで固定する。
+    env: {
+      VITE_API_BASE_URL: "http://localhost:9999",
+    },
   },
 });
