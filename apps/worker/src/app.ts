@@ -23,6 +23,7 @@ import { registerMeLotteries } from "./routes/meLotteries.ts";
 import { registerMeNotificationPreferences } from "./routes/meNotificationPreferences.ts";
 import { registerMeStatistics } from "./routes/meStatistics.ts";
 import { registerMeSyncBootstrap } from "./routes/meSyncBootstrap.ts";
+import { registerE2eSeed } from "./routes/e2eSeed.ts";
 import { registerRevenuecatEventRetry } from "./routes/revenuecatEventRetry.ts";
 import { registerReview } from "./routes/review.ts";
 
@@ -78,6 +79,9 @@ export function createApp(createDb: CreateDb) {
 
   // 内部管理API（Phase 5: needs_review 管理、再解析）
   registerReview(app);
+
+  // E2E（Playwright）テスト専用。E2E_SEED_ENABLED=trueの環境でのみ有効（fail-closed、詳細はファイル参照）。
+  registerE2eSeed(app);
 
   // Apple側トークン失効の再試行（内部API、Cron Triggerからも同じロジックを呼ぶ。Mobile-G2A-Hardening）
   registerAppleRevocationRetry(app);

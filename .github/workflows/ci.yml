@@ -64,3 +64,24 @@ jobs:
       - run: npm run lint -w @x-post/admin-web
       - run: npm run test -w @x-post/admin-web
       - run: npm run build -w @x-post/admin-web
+
+  admin-web-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+        working-directory: apps/admin-web
+      # staging/productionには一切接続しない。使い捨てのローカルworker（一時SQLite）と
+      # ローカルのVite devサーバーだけを起動して完結させる（playwright.config.ts参照）。
+      - run: npm run test:e2e -w @x-post/admin-web
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/admin-web/playwright-report/
+          retention-days: 7

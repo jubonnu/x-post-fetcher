@@ -94,6 +94,12 @@ export interface Env extends DbEnv {
   /** 管理画面Webアプリ（Cloudflare Pages）のOriginをカンマ区切りで指定。`/admin/*`のCORS許可に使う。 */
   ADMIN_WEB_ORIGINS?: string;
 
+  /**
+   * `POST /internal/e2e-seed`を有効にする（Playwright E2E専用、`"true"`の時のみ）。
+   * staging/productionでは絶対に設定しないこと。
+   */
+  E2E_SEED_ENABLED?: string;
+
   /** 商品画像（管理画面からのアップロード）保存用R2バケット（Phase 7）。 */
   LOTTERY_IMAGES?: R2Bucket;
 }

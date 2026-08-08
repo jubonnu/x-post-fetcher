@@ -14,6 +14,10 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/test-setup.ts"],
+    // e2e/配下はPlaywright専用（@playwright/testのtest/expectを使う別ランナー）のため、
+    // vitestのデフォルトinclude（*.spec.tsも拾う）から明示的に除外する
+    // （vitestの既定exclude一覧を上書きしてしまうため、主要なものは残しつつ追加する）。
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.{idea,git,cache,output,temp}/**", "e2e/**"],
     // テストは`.env`ファイル（gitignore対象、開発者のローカル環境にしか無い）の有無に
     // 依存してはいけない。CI（.envが存在しない）でVITE_API_BASE_URL未設定エラーになり、
     // 認証まわりのテストが軒並み失敗していたため、テスト専用の値をここで固定する。
