@@ -104,6 +104,24 @@ describe("POST /admin/auth/login", () => {
     expect(res.status).toBe(401);
   });
 
+  it("メールアドレスの大文字小文字が違ってもログインできる（大文字小文字を区別しない）", async () => {
+    await signup("Case.Test@Example.com", "password123");
+    const res = await app.request("/admin/auth/login", {
+      method: "POST",
+      headers: jsonHeaders(),
+      body: JSON.stringify({ email: "case.test@example.com", password: "password123" }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { admin: { email: string } };
+    expect(body.admin.email).toBe("case.test@example.com");
+  });
+
+  it("大文字小文字違いのメールアドレスで再登録すると409 CONFLICT（別アカウント扱いにしない）", async () => {
+    await signup("dupe.case@example.com", "password123");
+    const res = await signup("Dupe.Case@Example.com", "password123");
+    expect(res.status).toBe(409);
+  });
+
   it("存在しないメールアドレスでも401 UNAUTHORIZED（列挙攻撃対策）", async () => {
     const res = await app.request("/admin/auth/login", {
       method: "POST",
