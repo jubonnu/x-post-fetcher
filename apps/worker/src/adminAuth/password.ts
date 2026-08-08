@@ -8,12 +8,23 @@ const PBKDF2_ITERATIONS = 100_000;
 const SALT_BYTES = 16;
 const HASH_BITS = 256;
 
+/**
+ * `Buffer`（`nodejs_compat`のポリフィル）はCloudflare Workers実機とNode（テスト）とで
+ * 挙動が完全に一致しない疑いがあり、実際に本番デプロイ後「サインアップ直後のログインが
+ * 常に失敗する」不具合が発生した（同一パスワードでもハッシュの検証が通らない）。
+ * `btoa`/`atob`はWorkers・Node両方のネイティブ実装であるため、こちらに寄せて解消する。
+ */
 function toBase64(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("base64");
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
 }
 
 function fromBase64(value: string): Uint8Array {
-  return new Uint8Array(Buffer.from(value, "base64"));
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 async function derive(password: string, salt: Uint8Array, iterations: number): Promise<Uint8Array> {
