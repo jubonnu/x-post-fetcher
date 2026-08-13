@@ -233,6 +233,12 @@ button:disabled {
   color: var(--warn-text);
 }
 
+.badge.ended {
+  background: #f0f1f3;
+  color: #4b5158;
+  margin-left: 6px;
+}
+
 .pagination-row {
   display: flex;
   align-items: center;

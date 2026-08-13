@@ -33,6 +33,46 @@ function displayPublishedAt(item: LotteryRow): string | null {
   return `X投稿日時: ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/**
+ * 日付のみ（applicationEndDate）の値を、JSTの日付境界（翌日0:00 JSTからended）として
+ * 解釈するためのオフセット（ミリ秒）。ワーカー側`endAtEpochExpr`・モバイル側`normalizeDeadline`と
+ * 同一のルールであり、3者は必ず同期させること。
+ */
+const JST_DATE_ONLY_END_OF_DAY_OFFSET_MS = (24 - 9) * 60 * 60 * 1000;
+
+/** 応募締切のエポックms（未設定ならnull）。atがあれば優先、無ければdateにJST日付境界を加算する。 */
+function endAtMs(item: LotteryRow): number | null {
+  if (item.applicationEndAt) {
+    const t = new Date(item.applicationEndAt).getTime();
+    return Number.isNaN(t) ? null : t;
+  }
+  if (item.applicationEndDate) {
+    const t = new Date(`${item.applicationEndDate}T00:00:00Z`).getTime();
+    return Number.isNaN(t) ? null : t + JST_DATE_ONLY_END_OF_DAY_OFFSET_MS;
+  }
+  return null;
+}
+
+/** 応募締切を表示用に整形する（時刻まで確定していればat、日付のみならdateを表示）。 */
+function displayDeadline(item: LotteryRow): string | null {
+  if (item.applicationEndAt) {
+    const d = new Date(item.applicationEndAt);
+    if (Number.isNaN(d.getTime())) return null;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return `締切: ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  if (item.applicationEndDate) {
+    return `締切: ${item.applicationEndDate.replaceAll("-", "/")}`;
+  }
+  return null;
+}
+
+/** 応募締切を過ぎているか（未設定なら判定不能としてfalse）。 */
+function isEnded(item: LotteryRow): boolean {
+  const ms = endAtMs(item);
+  return ms !== null && ms < Date.now();
+}
+
 /** タブごとのサーバー側フィルタ条件をクエリ文字列へ変換する。 */
 function filterQueryFor(tab: Tab): string {
   if (tab === "approved") return "verificationStatus=approved";
@@ -145,7 +185,9 @@ export function LotteryListPage() {
               <div className="title">{displayTitle(item)}</div>
               <div className="muted">{displayStore(item)}</div>
               {displayPublishedAt(item) ? <div className="muted">{displayPublishedAt(item)}</div> : null}
+              {displayDeadline(item) ? <div className="muted">{displayDeadline(item)}</div> : null}
               <VerificationBadge status={item.verificationStatus} />
+              {isEnded(item) ? <span className="badge ended">終了済み</span> : null}
             </div>
             <div className="lottery-actions">
               <Link to={`/lotteries/${item.id}`}>

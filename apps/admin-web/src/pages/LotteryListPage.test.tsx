@@ -200,6 +200,84 @@ describe("LotteryListPage", () => {
     expect(screen.queryByText(/X投稿日時/)).not.toBeInTheDocument();
   });
 
+  describe("応募締切の表示と終了済みバッジ", () => {
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(new Date("2026-08-13T12:00:00.000Z").getTime());
+    });
+
+    it("applicationEndAtがあれば「締切」を表示する", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        items: [makeLottery({ id: 21, applicationEndAt: "2026-08-20T14:59:00.000Z" })],
+        total: 1,
+      } satisfies LotteryListResponse);
+
+      renderPage();
+
+      expect(await screen.findByText(/締切: 2026\/08\/20/)).toBeInTheDocument();
+    });
+
+    it("applicationEndAtが無くapplicationEndDateのみあれば日付のみの「締切」を表示する", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        items: [makeLottery({ id: 22, applicationEndDate: "2026-08-20" })],
+        total: 1,
+      } satisfies LotteryListResponse);
+
+      renderPage();
+
+      expect(await screen.findByText("締切: 2026/08/20")).toBeInTheDocument();
+    });
+
+    it("締切日時ともに未設定なら「締切」を表示しない", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        items: [makeLottery({ id: 23 })],
+        total: 1,
+      } satisfies LotteryListResponse);
+
+      renderPage();
+      await screen.findByText("商品23");
+
+      expect(screen.queryByText(/締切:/)).not.toBeInTheDocument();
+    });
+
+    it("締切を過ぎていれば「終了済み」バッジを表示する", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        items: [makeLottery({ id: 24, applicationEndAt: "2026-08-01T14:59:00.000Z" })],
+        total: 1,
+      } satisfies LotteryListResponse);
+
+      renderPage();
+
+      expect(await screen.findByText("終了済み")).toBeInTheDocument();
+    });
+
+    it("締切前なら「終了済み」バッジを表示しない", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        items: [makeLottery({ id: 25, applicationEndAt: "2026-08-20T14:59:00.000Z" })],
+        total: 1,
+      } satisfies LotteryListResponse);
+
+      renderPage();
+      await screen.findByText("商品25");
+
+      expect(screen.queryByText("終了済み")).not.toBeInTheDocument();
+    });
+
+    it("日付のみの締切は、当日23:59 JSTまでは終了済み扱いにしない（翌日0:00 JSTから終了済み）", async () => {
+      // システム時刻を2026-08-13T12:00:00Z（=JST 21:00）に固定。
+      // applicationEndDate=2026-08-13なら、JSTの日付境界（翌日0:00 JST = 2026-08-13T15:00:00Z）
+      // より前なのでまだ終了済みではない。
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        items: [makeLottery({ id: 26, applicationEndDate: "2026-08-13" })],
+        total: 1,
+      } satisfies LotteryListResponse);
+
+      renderPage();
+      await screen.findByText("商品26");
+
+      expect(screen.queryByText("終了済み")).not.toBeInTheDocument();
+    });
+  });
+
   it("取得に失敗するとエラーメッセージを表示する", async () => {
     vi.spyOn(client, "apiRequest").mockRejectedValue(new client.ApiError("SERVICE_BUSY", "サーバーが混雑しています", 503));
 
