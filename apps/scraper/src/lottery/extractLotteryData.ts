@@ -17,6 +17,21 @@ export function stripListMarker(line: string): string {
   return line.replace(LIST_MARKER_PATTERN, "").trim();
 }
 
+/** 単一抽選投稿で【】がフィールドラベルとして使われる代表的な語（商品名セクションの見出しとは区別する）。 */
+const SECTION_LABEL_STOPWORDS = new Set([
+  "応募期間",
+  "当選発表",
+  "購入期間",
+  "購入期限",
+  "受取期間",
+  "受取期限",
+  "応募方法",
+  "受取方法",
+  "支払方法",
+  "注意事項",
+  "対象",
+]);
+
 const emptyResolved = (): ResolvedDate => ({
   at: null,
   date: null,
@@ -56,10 +71,16 @@ function firstUrlOfType(urls: ClassifiedUrl[], type: ClassifiedUrl["urlType"]): 
   return urls.find((u) => u.urlType === type)?.originalUrl ?? null;
 }
 
-/** 先頭の店舗名らしき語を抽出（"<店舗>で..." / "<店舗>では..."） */
+/**
+ * 先頭の店舗名らしき語を抽出（"<店舗>で..." / "<店舗>では..."）。
+ * 店舗名中のスペースは除外しない（"BIGMAGIC 池袋店"・"Tokyo Otaku Mode"のように、実際の
+ * 店舗名・ブランド名にスペースを含むケースが多いため、除外すると抽出自体が失敗してしまう。
+ * 2026-08、実データで確認）。文字数上限も、長めの正式ブランド名（"ONE PIECEカードゲーム公式
+ * ショップ"等）を拾えるよう20→40に広げた。
+ */
 function extractStoreName(body: string): string | null {
   const firstLine = body.split(/\n+/)[0] ?? "";
-  const m = firstLine.match(/^\s*([^\s。、「」]{2,20}?)(?:で|では|にて)/);
+  const m = firstLine.match(/^\s*([^。、「」]{2,40}?)(?:で|では|にて)/);
   return m ? m[1] : null;
 }
 
@@ -180,6 +201,36 @@ export function splitLotteries(
     notes: null,
   });
 
+  // 行から店舗名と（あれば）締切日付を取り出す（(0)(1)で共通利用）。
+  const parseStoreAndDeadline = (line: string): { store: string | null; applicationEnd: ResolvedDate } => {
+    const m = line.match(/^([^\d]+?)\s*([\d/].*)?$/);
+    const store = (m ? m[1] : line).trim() || null;
+    const dateText = m && m[2] ? m[2] : null;
+    return { store, applicationEnd: dateText ? resolveDate(dateText, postPublishedAt) : emptyResolved() };
+  };
+
+  // (0) 【商品名】セクション区切り + 各セクション内にマーカー行が2つ以上（合計）→ セクションの
+  // 商品名 × 行ごとの店舗で分割。「本日開始された抽選まとめ」のような、複数商品をそれぞれ
+  // 【】見出しでグループ化し、各見出しの下に複数店舗を並べる投稿形式に対応する（2026-08、実データで確認）。
+  // 【応募期間】【当選発表】のようにフィールドラベルとして【】を使う単一抽選投稿もあるため、
+  // 既知のラベル語は商品名候補から除外する（該当セクション内に実際のマーカー行が無ければ
+  // どのみち0件になり実害は無いが、意図を明確にするため明示的に除外する）。
+  const sectionMatches = [...body.matchAll(/【([^】]{1,100})】([\s\S]*?)(?=【|$)/g)].filter(
+    ([, header]) => !SECTION_LABEL_STOPWORDS.has(header.trim())
+  );
+  if (sectionMatches.length > 0) {
+    const sectionResults: ExtractedLottery[] = [];
+    for (const [, sectionProductRaw, sectionBody] of sectionMatches) {
+      const sectionProduct = sectionProductRaw.trim() || null;
+      const sectionMarkerLines = sectionBody.split(/\n+/).filter((l) => LIST_MARKER_PATTERN.test(l));
+      for (const line of sectionMarkerLines) {
+        const { store, applicationEnd } = parseStoreAndDeadline(stripListMarker(line));
+        sectionResults.push(make(sectionProduct, store, applicationEnd));
+      }
+    }
+    if (sectionResults.length >= 2) return sectionResults;
+  }
+
   // (1) 店舗マーカー行が2つ以上 → 店舗ごとに分割
   // 各行が独自の「」商品名を持つ場合はそれを使用する（店舗ごとに商品が異なるまとめ投稿）。
   // 無ければ従来通りヘッダ商品を共通で使う。
@@ -188,10 +239,7 @@ export function splitLotteries(
       const rest = stripListMarker(line);
       const lineProduct = extractProductName(rest);
       const withoutProduct = lineProduct ? rest.replace(/[「『][^」』]{1,60}[」』]/, "").trim() : rest;
-      const m = withoutProduct.match(/^([^\d]+?)\s*([\d/].*)?$/);
-      const store = (m ? m[1] : withoutProduct).trim() || null;
-      const dateText = m && m[2] ? m[2] : null;
-      const applicationEnd = dateText ? resolveDate(dateText, postPublishedAt) : emptyResolved();
+      const { store, applicationEnd } = parseStoreAndDeadline(withoutProduct);
       return make(lineProduct ?? headerProduct, store, applicationEnd);
     });
   }

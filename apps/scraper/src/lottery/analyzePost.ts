@@ -5,20 +5,44 @@ import { classifyPostUrls } from "./classifyUrls.ts";
 import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries } from "./extractLotteryData.ts";
 
 /** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
-export const PARSER_VERSION = "phase3-rules-1";
+export const PARSER_VERSION = "phase3-rules-2";
 
-/**
- * 複数店舗・複数商品・複数セクションを含む「複雑/曖昧」な投稿かを素朴に判定。
- * ルールでは安全に分割できないため needs_review に落とす（分割は Phase 3）。
- */
-export function assessComplexity(bodyText: string): boolean {
+interface ComplexitySignals {
+  productCount: number;
+  storeMarkerCount: number;
+  hasMultiSection: boolean;
+}
+
+function complexitySignals(bodyText: string): ComplexitySignals {
   const body = bodyText ?? "";
   const productCount = (body.match(/[「『][^」』]{1,60}[」』]/g) ?? []).length;
   // splitLotteriesのmarkerLines判定（LIST_MARKER_PATTERN）と同じ基準で数える
   // （ズレると「複数と判定されたのに分割パターンが拾えない」不整合が起きるため）。
   const storeMarkerCount = body.split(/\n+/).filter((l) => LIST_MARKER_PATTERN.test(l)).length;
   const hasMultiSection = /応募期間/.test(body) && /当選発表/.test(body);
-  return productCount > 1 || storeMarkerCount > 1 || hasMultiSection;
+  return { productCount, storeMarkerCount, hasMultiSection };
+}
+
+/**
+ * 複数店舗・複数商品・複数セクションを含む「複雑/曖昧」な投稿かを素朴に判定。
+ * ルールでは安全に分割できないため needs_review に落とす（分割は Phase 3）。
+ */
+export function assessComplexity(bodyText: string): boolean {
+  const s = complexitySignals(bodyText);
+  return s.productCount > 1 || s.storeMarkerCount > 1 || s.hasMultiSection;
+}
+
+/**
+ * 実際に複数の商品・店舗マーカーが存在するか（`hasMultiSection`だけでは「複数」とは言えない）。
+ * 「応募期間」「当選発表」の両方を書いただけの、ごく普通の単一抽選投稿でも`assessComplexity`は
+ * trueになる。分割に失敗した際、これがfalse（＝本当は単一の投稿だった）なら単一抽出の結果を
+ * そのまま採用してよいが、trueなら複数項目のうち一部だけを黙って採用してしまうことになるため
+ * needs_reviewへ落とす必要がある（2026-08、実データで確認: この区別が無いと「応募期間」
+ * 「当選発表」を両方書いた普通の単一抽選投稿が軒並みneeds_reviewになっていた）。
+ */
+function hasMultipleDistinctItems(bodyText: string): boolean {
+  const s = complexitySignals(bodyText);
+  return s.productCount > 1 || s.storeMarkerCount > 1;
 }
 
 /**
@@ -52,18 +76,25 @@ export async function analyzePost(post: RawPost): Promise<AnalysisInput> {
   }
 
   const single = extractSingleLottery(post.bodyText, post.publishedAt, urls);
+  const singleOk = Boolean(single.productNameRaw && single.storeNameRaw);
 
   // 複雑/曖昧（複数店舗・複数商品）→ ルールで分割を試みる（Phase 3）。
-  // 確実に分割でき（各件に商品と店舗が揃う）→ success。分割できなければ単一 + needs_review。
+  // 確実に分割でき（各件に商品と店舗が揃う）→ success。
   if (assessComplexity(post.bodyText)) {
     const split = splitLotteries(post.bodyText, post.publishedAt, urls);
     if (split && split.length >= 2 && split.every((l) => l.productNameRaw && l.storeNameRaw)) {
       return { ...base, extractedLotteries: split, analysisStatus: "success" };
     }
+    // 分割できなかった場合: 実際には複数商品/店舗マーカーが無い（＝「応募期間」「当選発表」を
+    // 両方書いただけの普通の単一抽選投稿）で、単一抽出が成功していればそれをsuccessとして採用する。
+    // 実際に複数マーカーが存在するのに分割できなかった場合のみneeds_reviewへ落とす
+    // （一部項目だけを黙って採用してしまうことを避けるため）。
+    if (singleOk && !hasMultipleDistinctItems(post.bodyText)) {
+      return { ...base, extractedLotteries: [single], analysisStatus: "success" };
+    }
     return { ...base, extractedLotteries: [single], analysisStatus: "needs_review" };
   }
 
   // 単純 → ルール単一抽出で確定（商品/店舗が欠ける場合は判定不能として needs_review）
-  const ok = Boolean(single.productNameRaw && single.storeNameRaw);
-  return { ...base, extractedLotteries: [single], analysisStatus: ok ? "success" : "needs_review" };
+  return { ...base, extractedLotteries: [single], analysisStatus: singleOk ? "success" : "needs_review" };
 }

@@ -27,6 +27,13 @@ const has = (text: string, words: string[]) => words.some((w) => text.toLowerCas
 const count = (text: string, words: string[]) =>
   words.reduce((n, w) => (text.toLowerCase().includes(w.toLowerCase()) ? n + 1 : n), 0);
 
+/**
+ * 「日付＋〆」形式の締切表記（例:「8/12(水)21:30〆」）。対象アカウントは「締切」という単語をほぼ使わず、
+ * この略記号のみで締切を書く投稿が非常に多い（2026-08、実データで確認）。「〆」単体をLOTTERY_SIGNALSに
+ * 加えると無関係な投稿（価格情報まとめ等）に誤爆する余地があるため、直前に日付が伴う場合のみに限定する。
+ */
+const DEADLINE_MARK_PATTERN = /\d{1,2}\/\d{1,2}[^\n]{0,20}〆/;
+
 export function detectCardType(text: string): CardType {
   if (has(text, CARD_POKEMON)) return "pokemon";
   if (has(text, CARD_ONEPIECE)) return "onepiece";
@@ -55,7 +62,7 @@ export function classifyPost(bodyText: string): Classification {
   const cardType = detectCardType(text);
 
   const lotterySignalCount = count(text, LOTTERY_SIGNALS);
-  const hasStrongLottery = lotterySignalCount > 0;
+  const hasStrongLottery = lotterySignalCount > 0 || DEADLINE_MARK_PATTERN.test(text);
   const isPreparation = has(text, PREPARATION_SIGNALS) && !has(text, ["抽選開始されました", "応募受付中", "応募はこちら"]);
 
   let postType: PostType;
@@ -67,7 +74,7 @@ export function classifyPost(bodyText: string): Classification {
   } else if (has(text, RESULT_SIGNALS)) {
     postType = "result_announced";
   } else if (isPreparation) {
-    // 事前準備（会員登録・購入履歴・「備えて」等）は抽選情報ではない
+    // 事前準備（会員登録・「備えて」等）は抽選情報ではない
     postType = "lottery_preparation";
   } else if (has(text, SUMMARY_SIGNALS) && hasStrongLottery) {
     postType = "lottery_summary";

@@ -44,6 +44,31 @@ describe("classifyPost", () => {
     expect(c.isLotteryInformation).toBe(true);
     expect(c.cardType).toBe("pokemon" === c.cardType ? c.cardType : c.cardType); // cardTypeは投稿内容依存
   });
+
+  it("「締切」の代わりに「〆」だけで日付が書かれたまとめ投稿もlottery_summary（抽選情報）と判定する", () => {
+    // 実アカウント（@Zabi_pokeka）の実際の投稿形式（2026-08、本番DBで検証済み）:
+    // 「締切」という単語を使わず、日付+「〆」のみで締切を書く。
+    const c = classifyPost(
+      "本日開始された抽選まとめ💁‍♂️\n\n【ストームエメラルダ】\n✅ホビーステーション 2BOX 8/13(木)23:59〆\nhttps://example.com"
+    );
+    expect(c.postType).toBe("lottery_summary");
+    expect(c.isLotteryInformation).toBe(true);
+  });
+
+  it("「購入履歴が必要」という応募条件の説明は事前準備扱いにしない", () => {
+    // 実データ確認: 「(応募には1ヵ月以上前でのご購入履歴が必要)」のような応募条件の説明であり、
+    // 「購入履歴を作っておきましょう」のような事前準備の呼びかけではない。
+    const c = classifyPost(
+      "本日告知or開始された抽選まとめ💁‍♂️\n\n【世界最強の戦士】\n✅ヤマシロヤ 8/12(水)21:30〆\n(応募には1ヵ月以上前でのご購入履歴が必要)"
+    );
+    expect(c.postType).toBe("lottery_summary");
+    expect(c.isLotteryInformation).toBe(true);
+  });
+
+  it("日付を伴わない単なる「〆」は締切シグナルとして扱わない（無関係な投稿への誤爆防止）", () => {
+    const c = classifyPost("これで話は〆ますね、また明日");
+    expect(c.isLotteryInformation).toBe(false);
+  });
 });
 
 describe("extractSingleLottery", () => {
@@ -149,6 +174,47 @@ describe("classifyPostUrls / analyzePost", () => {
     expect(analysis.extractedLotteries).toHaveLength(2);
     expect(analysis.extractedLotteries.map((l) => l.storeNameRaw)).toEqual(["ドラスタで", "ホビステで"]);
     expect(analysis.extractedLotteries.map((l) => l.productNameRaw)).toEqual(["メガドリームex", "トリプレットビート"]);
+  });
+
+  it("【商品名】セクション区切り＋各セクション複数店舗のまとめ投稿を分割できる（実アカウントの実際の投稿形式）", async () => {
+    const body =
+      "本日開始された抽選まとめ💁‍♂️\n\n【ストームエメラルダ】\n✅ホビーステーション 8/13(木)23:59〆\nhttps://example.com\n\n✅BIGMAGIC 池袋店 8/13(木)23:59〆\nhttps://example.com\n\n【世界最強の戦士】\n✅キデイランド吉祥寺店 8/13(木)23:59〆\nhttps://example.com";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(3);
+    expect(analysis.extractedLotteries.map((l) => l.productNameRaw)).toEqual([
+      "ストームエメラルダ",
+      "ストームエメラルダ",
+      "世界最強の戦士",
+    ]);
+    expect(analysis.extractedLotteries.map((l) => l.storeNameRaw)).toEqual([
+      "ホビーステーション",
+      "BIGMAGIC 池袋店",
+      "キデイランド吉祥寺店",
+    ]);
+  });
+
+  it("「応募期間」「当選発表」を両方書いただけの普通の単一抽選投稿はsuccessになる（分割対象の複数マーカーが無いため）", async () => {
+    // 「応募期間」+「当選発表」の両方があるだけでassessComplexityがtrueになるが、
+    // 実際には単一の抽選なので分割せず単一抽出の結果をそのまま採用すべき。
+    const body = "BIGMAGIC 池袋店で拡張パック「ストームエメラルダ」の抽選開始されました\n【応募期間】\n8月13日(木)23:59〆\n【当選発表】\n8月14日(金)";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(1);
+    expect(analysis.extractedLotteries[0].productNameRaw).toBe("ストームエメラルダ");
+    expect(analysis.extractedLotteries[0].storeNameRaw).toBe("BIGMAGIC 池袋店");
+  });
+
+  it("店舗名にスペースを含む場合でも抽出できる（BIGMAGIC 池袋店、Tokyo Otaku Mode等）", () => {
+    const l1 = extractSingleLottery("Tokyo Otaku Modeで「ストームエメラルダ」の抽選開始されました", POST_AT, []);
+    expect(l1.storeNameRaw).toBe("Tokyo Otaku Mode");
+
+    const l2 = extractSingleLottery(
+      "ONE PIECEカードゲーム公式ショップで「ブースターパック 世界最強の戦士」の抽選開始されました",
+      POST_AT,
+      []
+    );
+    expect(l2.storeNameRaw).toBe("ONE PIECEカードゲーム公式ショップ");
   });
 });
 

@@ -9,11 +9,8 @@
  *   MAX_JOBS      … 1回の実行で処理する最大件数（デフォルト 10）
  */
 
-import type { ExternalLink } from "../scraping/x/parseTweetDom.ts";
-import { classifyPost } from "../lottery/classifyPost.ts";
-import { classifyPostUrls } from "../lottery/classifyUrls.ts";
-import { extractSingleLottery, splitLotteries } from "../lottery/extractLotteryData.ts";
-import { assessComplexity, PARSER_VERSION } from "../lottery/analyzePost.ts";
+import type { ExternalLink, RawPost } from "../scraping/x/parseTweetDom.ts";
+import { analyzePost } from "../lottery/analyzePost.ts";
 import { computeContentHash, type AnalysisInput } from "@x-post/shared";
 
 const WORKER_URL = (process.env.WORKER_URL ?? "http://localhost:8787").replace(/\/$/, "");
@@ -55,47 +52,29 @@ async function fetchNextJob(): Promise<JobResponse | null> {
   return json.job;
 }
 
-/** ルールベース解析を実行して AnalysisInput を生成する（LLM不使用）。 */
-async function reanalyze(
-  bodyText: string,
-  publishedAt: string | null,
-  externalUrls: string[],
-  imageUrls: string[]
-): Promise<AnalysisInput> {
-  // DB に保存されている externalUrls は string[] なので ExternalLink[] に変換
-  const externalLinks: ExternalLink[] = externalUrls.map((href) => ({ href, text: href }));
-
-  const cls = classifyPost(bodyText);
-  const urls = classifyPostUrls(externalLinks, imageUrls);
-  const inputContentHash = await computeContentHash(bodyText);
-
-  const base: AnalysisInput = {
-    postType: cls.postType,
-    isLotteryInformation: cls.isLotteryInformation,
-    cardType: cls.cardType,
-    confidenceScore: cls.confidenceScore,
-    analysisStatus: "success",
-    parserVersion: PARSER_VERSION,
-    inputContentHash,
-    extractedLotteries: [],
-    urls,
-    errorMessage: null,
+/**
+ * ルールベース解析を実行して AnalysisInput を生成する（LLM不使用）。
+ * 実体は`analyzePost`（`lottery/analyzePost.ts`）に一本化してある。以前はここに同じ判定ロジックを
+ * 重複実装していたが、片方だけ修正され挙動がズレる事故を防ぐため`analyzePost`を直接呼ぶように統一した
+ * （2026-08）。DB保存済みの投稿を`RawPost`相当の形に詰め替えて渡す。
+ */
+async function reanalyze(sp: StoredSourcePost): Promise<AnalysisInput> {
+  const externalLinks: ExternalLink[] = sp.externalUrls.map((href) => ({ href, text: href }));
+  const rawPost: RawPost = {
+    tweetId: sp.externalPostId,
+    authorId: null,
+    authorUsername: null,
+    authorDisplayName: null,
+    bodyText: sp.bodyRaw ?? "",
+    publishedAt: sp.publishedAt,
+    sourceUrl: sp.sourceUrl ?? "https://x.com",
+    externalUrls: sp.externalUrls,
+    externalLinks,
+    imageUrls: sp.imageUrls,
+    rawHtml: "",
+    cleanedHtml: "",
   };
-
-  if (!cls.isLotteryInformation) return base;
-
-  const single = extractSingleLottery(bodyText, publishedAt, urls);
-
-  if (assessComplexity(bodyText)) {
-    const split = splitLotteries(bodyText, publishedAt, urls);
-    if (split && split.length >= 2 && split.every((l) => l.productNameRaw && l.storeNameRaw)) {
-      return { ...base, extractedLotteries: split, analysisStatus: "success" };
-    }
-    return { ...base, extractedLotteries: [single], analysisStatus: "needs_review" };
-  }
-
-  const ok = Boolean(single.productNameRaw && single.storeNameRaw);
-  return { ...base, extractedLotteries: [single], analysisStatus: ok ? "success" : "needs_review" };
+  return analyzePost(rawPost);
 }
 
 /** Worker の /ingest に解析結果を送信する。 */
@@ -186,12 +165,7 @@ async function main(): Promise<void> {
     }
 
     try {
-      const analysis = await reanalyze(
-        sourcePost.bodyRaw,
-        sourcePost.publishedAt,
-        sourcePost.externalUrls,
-        sourcePost.imageUrls
-      );
+      const analysis = await reanalyze(sourcePost);
       await postIngest(sourcePost, analysis);
       await reportComplete(jobId);
       console.log(
