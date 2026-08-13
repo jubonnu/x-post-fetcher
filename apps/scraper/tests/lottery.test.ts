@@ -194,6 +194,29 @@ describe("classifyPostUrls / analyzePost", () => {
     ]);
   });
 
+  it("1つの抽選の受取店舗一覧（■付き）を、別々の抽選として誤分割しない", async () => {
+    // 実データで発見した回帰: 「✅ジャンプショップ」という1件の抽選の下に、受取可能な
+    // 実店舗を「■札幌店 URL」「■仙台店 URL」...と列挙しているだけなのに、■をトップレベルの
+    // 区切りマーカーとして扱うと店舗数だけ誤って分割されてしまっていた（2026-08、修正済み）。
+    const body =
+      "【まとめ】\n✅ヤマダ電機 8/12(水)23:59〆\n\n✅ジャンプショップ 8月13日(木)23:59〆\n■札幌店 http://example.com/a\n■仙台店 http://example.com/b\n■東京駅店 http://example.com/c";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(2);
+    expect(analysis.extractedLotteries.map((l) => l.storeNameRaw)).toEqual(["ヤマダ電機", "ジャンプショップ"]);
+  });
+
+  it("【対象商品】【手順】のようなフィールドラベル節の中身（商品バリエーション列挙・手順説明）を店舗として誤抽出しない", async () => {
+    // 実データで発見した回帰: 【対象商品】の下の「・」箇条書き（商品バリエーション）や
+    // 【手順】の下の丸数字（①②③、認証手順の説明文）を、そのまま店舗として抽出してしまっていた。
+    const body =
+      "ポケセンオンラインで「30th CELEBRATION」の抽選開始されました\n\n【対象商品】\n・拡張パック「30th CELEBRATION」\n・30th CELEBRATION FUTURISTIC BOX\n\n【応募期間】\n8月14日(金)16時59分〆\n\n【手順】\n①デジタル認証アプリをダウンロードし利用登録を完了する。\n②プレイヤーズクラブの登録をする。";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.extractedLotteries).toHaveLength(1);
+    expect(analysis.extractedLotteries[0].productNameRaw).toBe("30th CELEBRATION");
+    expect(analysis.extractedLotteries[0].storeNameRaw).toBe("ポケセンオンライン");
+  });
+
   it("「応募期間」「当選発表」を両方書いただけの普通の単一抽選投稿はsuccessになる（分割対象の複数マーカーが無いため）", async () => {
     // 「応募期間」+「当選発表」の両方があるだけでassessComplexityがtrueになるが、
     // 実際には単一の抽選なので分割せず単一抽出の結果をそのまま採用すべき。

@@ -6,31 +6,47 @@ import { NOT_PUBLISHED_SIGNALS } from "./keywords.ts";
  * 複数店舗・複数商品の「まとめ投稿」で、1件ごとの見出しに使われる行頭マーカー。
  * `assessComplexity`（analyzePost.ts）と`splitLotteries`の両方で同じ判定基準を使うため、
  * ここで一元管理する（ズレると「複数と判定されたのに分割パターンが拾えない」不整合が起きる）。
- * 対応: ✅/✔/・ の記号、丸数字（①〜⑳）、キーキャップ絵文字（1️⃣〜9️⃣・🔟）、▼/■/★、
+ * 対応: ✅/✔/・ の記号、丸数字（①〜⑳）、キーキャップ絵文字（1️⃣〜9️⃣・🔟）、
  * 半角/全角の番号リスト（1. / １．）。
+ *
+ * 「▼/■/★」は含めない: 実データで、1つの抽選（例:「✅ジャンプショップ」）の下に
+ * 「■札幌店 URL」「■仙台店 URL」のように**同一抽選の受取可能店舗一覧**を■付きで
+ * 列挙するケースがあり、これをトップレベルの区切りマーカーとして扱うと1件の抽選が
+ * 店舗数だけ誤って分割されてしまう（2026-08、実データで確認・修正）。
  */
-export const LIST_MARKER_PATTERN =
-  /^\s*(?:[✅✔・▼■★]|[①-⑳]|[0-9]️?⃣|\u{1F51F}|\d+[.．]|[０-９]+[.．])/u;
+export const LIST_MARKER_PATTERN = /^\s*(?:[✅✔・]|[①-⑳]|[0-9]️?⃣|\u{1F51F}|\d+[.．]|[０-９]+[.．])/u;
 
 /** 行頭のマーカーを取り除いた残り部分を返す。 */
 export function stripListMarker(line: string): string {
   return line.replace(LIST_MARKER_PATTERN, "").trim();
 }
 
-/** 単一抽選投稿で【】がフィールドラベルとして使われる代表的な語（商品名セクションの見出しとは区別する）。 */
-const SECTION_LABEL_STOPWORDS = new Set([
-  "応募期間",
-  "当選発表",
-  "購入期間",
-  "購入期限",
-  "受取期間",
-  "受取期限",
-  "応募方法",
-  "受取方法",
-  "支払方法",
-  "注意事項",
-  "対象",
-]);
+/**
+ * 単一抽選投稿で【】がフィールドラベルとして使われる際に共通して含まれる語根。
+ * 完全一致ではなく部分一致で判定する（「対象商品」「対象商品一覧」「支払方法」等、語の組み合わせが
+ * 多様なため）。実データで、【】の下に「・」や丸数字の箇条書き（商品バリエーションの列挙・認証手順の
+ * 説明等）が続くケースがあり、これをそのまま商品/店舗として抽出すると誤ったデータになるため
+ * 除外する（2026-08、実データで確認）。商品名がこれらの語を部分文字列として含む可能性は
+ * 実用上無視できるほど低い。
+ */
+const SECTION_LABEL_STOPWORD_ROOTS = ["期間", "期限", "方法", "手順", "注意", "対象", "備考", "補足"];
+
+function isSectionLabel(header: string): boolean {
+  return SECTION_LABEL_STOPWORD_ROOTS.some((root) => header.includes(root));
+}
+
+/**
+ * 【応募期間】【手順】のようなフィールドラベルの節の中身を本文から取り除く。
+ * ラベル節の中にも「・」や丸数字の箇条書きが含まれることがあり、これを除去せずに
+ * マーカー行を数える/分割すると、ラベル節の中身（商品バリエーションの列挙・手順の説明等）を
+ * 誤って店舗として扱ってしまう（`assessComplexity`のstoreMarkerCount、`splitLotteries`の
+ * パターン(1)の両方で使う。パターン(0)は【】そのものを見るため対象外）。
+ */
+export function stripLabelSections(body: string): string {
+  return body.replace(/【([^】]{1,100})】([\s\S]*?)(?=【|$)/g, (whole, header: string) =>
+    isSectionLabel(header.trim()) ? "" : whole
+  );
+}
 
 const emptyResolved = (): ResolvedDate => ({
   at: null,
@@ -168,7 +184,10 @@ export function splitLotteries(
   urls: ClassifiedUrl[]
 ): ExtractedLottery[] | null {
   const body = bodyText ?? "";
-  const lines = body.split(/\n+/);
+  // パターン(1)・(2)はラベル節の中身（商品バリエーション列挙・手順説明等）を店舗として
+  // 誤抽出しないよう、ラベル節を除いた本文を使う（パターン(0)は【】自体を見るため元の本文を使う）。
+  const bodyWithoutLabelSections = stripLabelSections(body);
+  const lines = bodyWithoutLabelSections.split(/\n+/);
   const markerLines = lines.filter((l) => LIST_MARKER_PATTERN.test(l));
   const headerProduct = extractHeaderProduct(body);
 
@@ -216,7 +235,7 @@ export function splitLotteries(
   // 既知のラベル語は商品名候補から除外する（該当セクション内に実際のマーカー行が無ければ
   // どのみち0件になり実害は無いが、意図を明確にするため明示的に除外する）。
   const sectionMatches = [...body.matchAll(/【([^】]{1,100})】([\s\S]*?)(?=【|$)/g)].filter(
-    ([, header]) => !SECTION_LABEL_STOPWORDS.has(header.trim())
+    ([, header]) => !isSectionLabel(header.trim())
   );
   if (sectionMatches.length > 0) {
     const sectionResults: ExtractedLottery[] = [];

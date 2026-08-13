@@ -2,10 +2,10 @@ import { computeContentHash, type AnalysisInput } from "@x-post/shared";
 import type { RawPost } from "../scraping/x/parseTweetDom.ts";
 import { classifyPost } from "./classifyPost.ts";
 import { classifyPostUrls } from "./classifyUrls.ts";
-import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries } from "./extractLotteryData.ts";
+import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries, stripLabelSections } from "./extractLotteryData.ts";
 
 /** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
-export const PARSER_VERSION = "phase3-rules-2";
+export const PARSER_VERSION = "phase3-rules-3";
 
 interface ComplexitySignals {
   productCount: number;
@@ -16,9 +16,11 @@ interface ComplexitySignals {
 function complexitySignals(bodyText: string): ComplexitySignals {
   const body = bodyText ?? "";
   const productCount = (body.match(/[「『][^」』]{1,60}[」』]/g) ?? []).length;
-  // splitLotteriesのmarkerLines判定（LIST_MARKER_PATTERN）と同じ基準で数える
+  // splitLotteriesのmarkerLines判定（LIST_MARKER_PATTERN・ラベル節除外）と同じ基準で数える
   // （ズレると「複数と判定されたのに分割パターンが拾えない」不整合が起きるため）。
-  const storeMarkerCount = body.split(/\n+/).filter((l) => LIST_MARKER_PATTERN.test(l)).length;
+  const storeMarkerCount = stripLabelSections(body)
+    .split(/\n+/)
+    .filter((l) => LIST_MARKER_PATTERN.test(l)).length;
   const hasMultiSection = /応募期間/.test(body) && /当選発表/.test(body);
   return { productCount, storeMarkerCount, hasMultiSection };
 }
