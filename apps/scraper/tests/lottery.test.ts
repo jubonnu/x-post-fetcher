@@ -111,6 +111,99 @@ describe("extractSingleLottery", () => {
     const l = extractSingleLottery("ドラスタで「x」抽選\n応募期間 8/11(水)23:59〆", POST_AT, []);
     expect(l.applicationEnd.status).toBe("conflicting");
   });
+
+  describe("日付の次行探索（改善案1）", () => {
+    it("【応募期間】ラベル行自体に日付が無く、直後の行に日付がある場合はその行を採用する", () => {
+      // 実データで最も多いパターン: ラベル行と日付が別行に分かれている
+      const body = "ポケセンオンラインで「ストームエメラルダ」の抽選開始されました\n【応募期間】\n7月26日 23時59分〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.precision).toBe("date_only");
+      expect(l.applicationEnd.date).toBe("2026-07-26");
+    });
+
+    it("ラベル行の直後が日付ではない行（注意書き）で、その次の行に日付がある場合も2行先まで探索する", () => {
+      const body = "【応募期間】\n※店舗により対応が異なる場合があります\n7月26日 23時59分〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.precision).toBe("date_only");
+      expect(l.applicationEnd.date).toBe("2026-07-26");
+    });
+
+    it("価格・数量表記の行を挟んでも直後の日付行を見つけられる", () => {
+      const body = "【応募期間】\n5,000円(税込) 1BOX\n7月26日 23時59分〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.precision).toBe("date_only");
+      expect(l.applicationEnd.date).toBe("2026-07-26");
+    });
+
+    it("URL行はスキップし、それより後ろの日付行を採用する（URL内の数字を日付と誤認しない）", () => {
+      // "https://example.com/8/13" は日付誤認防止のガードが無いと 8/13 と誤って解釈されてしまう
+      const body = "【応募期間】\nhttps://example.com/8/13\n7月26日 23時59分〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.precision).toBe("date_only");
+      expect(l.applicationEnd.date).toBe("2026-07-26");
+    });
+
+    it("URL行しか続かず有効な日付が2行以内に無い場合は unknown のまま（URLを日付として誤認しない）", () => {
+      const body = "【応募期間】\nhttps://example.com/8/13\n詳細はこちら";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.precision).toBe("unknown");
+    });
+
+    it("3行先の日付は探索しない（1〜2行までの探索に限定）", () => {
+      const body = "【応募期間】\n注意書き1行目\n注意書き2行目\n7月26日 23時59分〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.precision).toBe("unknown");
+    });
+
+    it("ラベル行に「後日」等の未公開シグナルがあり、直後2行にも日付が無ければ not_published のまま", () => {
+      const body = "【応募期間】は後日発表\n詳細は追ってお知らせします";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.status).toBe("not_published");
+    });
+
+    it("キーワード行自体に日付があれば従来通りそれを採用する（次行探索による回帰無し）", () => {
+      const body = "【応募期間】8/11(火)23:59〆\n7月26日 23時59分〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.date).toBe("2026-08-11");
+    });
+  });
+
+  describe("【当選発表】セクションを商品グループ化の見出しとして誤分割しない", () => {
+    it("実データ回帰: 【当選発表】の下の「・商品名」リンク列挙を店舗ごとの分割対象にせず、単一抽選として扱う", async () => {
+      // 実データで発見した回帰: 【当選発表】は「期間」「期限」等のラベル語根を含まないため
+      // isSectionLabelがfalseを返し、splitLotteriesのパターン(0)がこれを商品グループ見出しと
+      // 誤認して、下にある「応募はこちら⬇️」の「・商品名」リンク列挙を店舗一覧として分割し、
+      // 商品名="当選発表"・店舗名=各リンクの商品名、という入れ替わったデータを生成していた。
+      const body =
+        "DMM通販で「受け継がれる意志/Heroines Edition」の抽選開始されました🔥🔥🔥\n\n【受付期間】\n7月21日(火)15:00〆\n\n【当選発表】\n7月23日(木)から4日以内に当選者にのみメール\n\n応募はこちら⬇️\n・受け継がれる意志\nhttps://dmm.com/mono/hobby/-/detail/=/cid=c260404065_lo2604_3/\n\n・Heroines Edition\nhttps://dmm.com/mono/hobby/-/detail/=/cid=c260404066_lo2604_3/";
+      // 実データ（sourcePostId=125）に合わせ、応募締切より前の投稿日時を使う（年推定の分岐を避けるため）
+      const post = { ...makePost(body), publishedAt: "2026-07-14T07:09:39.000Z" };
+      const analysis = await analyzePost(post);
+      expect(analysis.analysisStatus).toBe("success");
+      expect(analysis.extractedLotteries).toHaveLength(1);
+      expect(analysis.extractedLotteries[0].productNameRaw).toBe("受け継がれる意志/Heroines Edition");
+      expect(analysis.extractedLotteries[0].storeNameRaw).toBe("DMM通販");
+      expect(analysis.extractedLotteries[0].applicationEnd.date).toBe("2026-07-21");
+    });
+
+    it("【当選発表】ラベル自体は従来通り当選発表日時として抽出できる（stopword追加による回帰無し）", () => {
+      const body = "BIGMAGIC 池袋店で拡張パック「ストームエメラルダ」の抽選開始されました\n【応募期間】\n8月13日(木)23:59〆\n【当選発表】\n8月14日(金)";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.resultAnnouncement.date).toBe("2026-08-14");
+    });
+
+    it("実データ回帰: 【応募条件】の下の丸数字箇条書き（①②）を店舗ごとの分割対象にせず、単一抽選として扱う（sourcePostId=115）", async () => {
+      const body =
+        "イトーヨーカドーネット通販で拡張パック「ストームエメラルダ」の抽選開始されました‼️\n\n【受付期間】\n7月15日(火)23時59分〆\n\n【当選発表】\n7月31日(金)11時から順次\n\n【応募条件】\n①7IDをお持ちのお客様\n②二要素認証用電話番号を設定済のお客様\n\n抽選ページはこちら⬇️\nhttps://iyec.itoyokado.co.jp/shop/pages/apply_pomega_04.aspx";
+      const post = { ...makePost(body), publishedAt: "2026-07-10T00:00:00.000Z" };
+      const analysis = await analyzePost(post);
+      expect(analysis.analysisStatus).toBe("success");
+      expect(analysis.extractedLotteries).toHaveLength(1);
+      expect(analysis.extractedLotteries[0].productNameRaw).toBe("ストームエメラルダ");
+      expect(analysis.extractedLotteries[0].storeNameRaw).toBe("イトーヨーカドーネット通販");
+      expect(analysis.extractedLotteries[0].applicationEnd.date).toBe("2026-07-15");
+    });
+  });
 });
 
 describe("classifyPostUrls / analyzePost", () => {

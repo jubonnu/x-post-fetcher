@@ -78,6 +78,58 @@ describe("scorePair（スコアリング）", () => {
     const existing = { ...base, applicationEndDate: null, applicationEndPrecision: "unknown", resultAnnouncementDate: null };
     expect(scorePair(candidate, existing)).toBe(0);
   });
+
+  describe("商品名の部分集合ボーナス（改善案2）", () => {
+    const subsetA = { ...base, normalizedProductName: "ストームエメラルダ" };
+    const subsetB = { ...base, normalizedProductName: "ストームエメラルダ / スターターセット ex" };
+
+    it("店舗完全一致・締切一致なら部分集合を完全一致相当(40)として加点する", () => {
+      expect(scorePair(subsetA, subsetB)).toBe(85); // 40(商品) + 30(店舗) + 15(締切)
+    });
+
+    it("店舗完全一致・締切1日差（安全な許容範囲内）でも部分集合ボーナスを加点する", () => {
+      const b = { ...subsetB, applicationEndDate: "2026-08-12", applicationEndAt: "2026-08-12T23:59:00+09:00" };
+      expect(scorePair(subsetA, b)).toBe(78); // 40(商品) + 30(店舗) + 8(締切1日差)
+    });
+
+    it("店舗が違う場合は部分集合でも完全一致相当にせず、従来の緩い部分一致(20)に留める", () => {
+      const b = { ...subsetB, normalizedStoreName: "ホビーステーション" };
+      // 部分集合ボーナス無し。商品はpartialIncludesの20のみ。店舗不一致(0) + 締切一致(15)
+      expect(scorePair(subsetA, b)).toBe(35);
+    });
+
+    it("店舗は一致するが締切が大きく異なる場合は部分集合ボーナスを加点しない", () => {
+      const b = { ...subsetB, applicationEndDate: "2026-08-25", applicationEndAt: "2026-08-25T23:59:00+09:00" };
+      // 部分集合ボーナス無し。商品はpartialIncludesの20のみ。店舗一致(30) + 締切差2週間で0
+      expect(scorePair(subsetA, b)).toBe(50);
+    });
+
+    it("店舗一致・締切一致でも、区切り文字で分割したトークンが全く重ならなければ加点しない", () => {
+      // 単なる文字列 includes/startsWith ではなくトークン集合で判定するため、
+      // 短い共通接頭辞だけの無関係な商品名は部分集合と判定しない
+      const unrelatedA = { ...base, normalizedProductName: "ポケモンカード 拡張パック A" };
+      const unrelatedB = { ...base, normalizedProductName: "ポケモンカード 拡張パック B" };
+      expect(scorePair(unrelatedA, unrelatedB)).toBe(45); // partialIncludesにも掛からない(0) + 30(店舗) + 15(締切)
+    });
+
+    it("完全一致（順序違いの集合一致）でも店舗・締切が揃えば完全一致相当として加点する", () => {
+      const a = { ...base, normalizedProductName: "ストームエメラルダ / スターターセット ex" };
+      const b = { ...base, normalizedProductName: "スターターセット ex / ストームエメラルダ" };
+      expect(scorePair(a, b)).toBe(85);
+    });
+
+    it("matchExistingLottery: 店舗・締切一致の部分集合ペアは自動マージされる", () => {
+      const r = matchExistingLottery(subsetA, [subsetB]);
+      expect(r.action).toBe("merge");
+      expect(r.score).toBe(85);
+    });
+
+    it("matchExistingLottery: 店舗が違う部分集合ペアは自動マージされない（reviewかnew）", () => {
+      const b = { ...subsetB, normalizedStoreName: "ホビーステーション" };
+      const r = matchExistingLottery(subsetA, [b]);
+      expect(r.action).not.toBe("merge");
+    });
+  });
 });
 
 describe("matchExistingLottery（判定）", () => {

@@ -54,6 +54,30 @@ const bothPresent = (a: string | null | undefined, b: string | null | undefined)
   norm(a).length > 0 && norm(b).length > 0;
 const partialIncludes = (a: string, b: string) => (a.length >= 2 && b.length >= 2 && (a.includes(b) || b.includes(a)));
 
+/** 商品名の区切り文字（半角/全角スラッシュ・読点・中黒）。 */
+const PRODUCT_NAME_SEPARATOR = /[/／、・]/;
+
+function productNameTokens(name: string): string[] {
+  return name
+    .split(PRODUCT_NAME_SEPARATOR)
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+}
+
+/**
+ * 商品名の部分集合一致を判定する（「ストームエメラルダ」と「ストームエメラルダ / スターターセット ex」
+ * のような表記ゆれ）。単純な文字列 includes/startsWith ではなく、区切り文字で分割したトークン集合の
+ * 包含関係で判定する（短い共通接頭辞だけで誤って一致判定しないため）。
+ */
+function isProductNameSubset(a: string, b: string): boolean {
+  const tokensA = productNameTokens(a);
+  const tokensB = productNameTokens(b);
+  if (tokensA.length === 0 || tokensB.length === 0) return false;
+  const [smaller, larger] = tokensA.length <= tokensB.length ? [tokensA, tokensB] : [tokensB, tokensA];
+  const largerSet = new Set(larger);
+  return smaller.every((t) => largerSet.has(t));
+}
+
 /** 締切が「確定」した日付を持つか（未確定は締切ブロック・締切スコアの対象外） */
 function resolvedEndDate(l: MatchableLottery): string | null {
   const p = l.applicationEndPrecision ?? "unknown";
@@ -94,17 +118,33 @@ export function hardBlockReason(a: MatchableLottery, b: MatchableLottery, opts: 
 export function scorePair(a: MatchableLottery, b: MatchableLottery): number {
   let score = 0;
 
+  // 店舗・締切は商品の部分集合ボーナス（改善案2）の適用条件としても使うため先に評価する。
+  const sa = norm(a.normalizedStoreName);
+  const sb = norm(b.normalizedStoreName);
+  const strongStoreMatch = bothPresent(sa, sb) && sa === sb;
+
+  const da = resolvedEndDate(a);
+  const db = resolvedEndDate(b);
+  const safeDeadlineMatch = da !== null && db !== null && dayDiff(da, db) <= 1;
+
   // 商品 40
   const pa = norm(a.normalizedProductName);
   const pb = norm(b.normalizedProductName);
   if (pa && pb) {
-    if (pa === pb) score += 40;
-    else if (partialIncludes(pa, pb)) score += 20;
+    if (pa === pb) {
+      score += 40;
+    } else if (strongStoreMatch && safeDeadlineMatch && isProductNameSubset(pa, pb)) {
+      // 「ストームエメラルダ」と「ストームエメラルダ / スターターセット ex」のような表記ゆれ。
+      // 店舗が完全一致し締切も安全な許容範囲内の場合に限り、完全一致相当として加点する
+      // （商品名の部分集合関係だけでは加点しない。誤統合防止のため、他条件と揃わない限り
+      // 従来通り partialIncludes によるゆるい加点に留める。2026-08、実データ改善）。
+      score += 40;
+    } else if (partialIncludes(pa, pb)) {
+      score += 20;
+    }
   }
 
   // 店舗 30
-  const sa = norm(a.normalizedStoreName);
-  const sb = norm(b.normalizedStoreName);
   if (sa && sb) {
     if (sa === sb) score += 30;
     else if (partialIncludes(sa, sb)) score += 15;
@@ -121,8 +161,6 @@ export function scorePair(a: MatchableLottery, b: MatchableLottery): number {
   if (bothPresent(a.region, b.region) && norm(a.region) === norm(b.region)) score += 5;
 
   // 締切 15（同日15 / 1日差8）
-  const da = resolvedEndDate(a);
-  const db = resolvedEndDate(b);
   if (da && db) {
     const diff = dayDiff(da, db);
     if (diff === 0) score += 15;

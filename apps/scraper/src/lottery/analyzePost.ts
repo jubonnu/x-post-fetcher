@@ -5,7 +5,7 @@ import { classifyPostUrls } from "./classifyUrls.ts";
 import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries, stripLabelSections } from "./extractLotteryData.ts";
 
 /** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
-export const PARSER_VERSION = "phase3-rules-3";
+export const PARSER_VERSION = "phase3-rules-4";
 
 interface ComplexitySignals {
   productCount: number;

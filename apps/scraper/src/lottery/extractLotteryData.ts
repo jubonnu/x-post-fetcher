@@ -29,7 +29,25 @@ export function stripListMarker(line: string): string {
  * 除外する（2026-08、実データで確認）。商品名がこれらの語を部分文字列として含む可能性は
  * 実用上無視できるほど低い。
  */
-const SECTION_LABEL_STOPWORD_ROOTS = ["期間", "期限", "方法", "手順", "注意", "対象", "備考", "補足"];
+const SECTION_LABEL_STOPWORD_ROOTS = [
+  "期間",
+  "期限",
+  "方法",
+  "手順",
+  "注意",
+  "対象",
+  "備考",
+  "補足",
+  // 「発表」「結果」「条件」が無いと、【当選発表】【応募条件】等のフィールドラベル節にある
+  // 「・商品名」の列挙や丸数字の箇条書き（実際はリンク列挙・応募条件の説明で、店舗ごとの
+  // 分割対象ではない）を、splitLotteriesのパターン(0)が商品グループ見出しと誤認し、
+  // 商品=ラベル名・店舗=各行、という入れ替わったデータを生成してしまう
+  // （2026-08、実データ sourcePostId=115,125 等で確認。198投稿中に同種の商品名衝突が
+  // 無いことも確認済み）。
+  "発表",
+  "結果",
+  "条件",
+];
 
 function isSectionLabel(header: string): boolean {
   return SECTION_LABEL_STOPWORD_ROOTS.some((root) => header.includes(root));
@@ -67,16 +85,46 @@ function lineContaining(body: string, keywords: string[]): string | null {
   return null;
 }
 
+/** 指定キーワードを含む行のインデックスを返す（複数該当は最初） */
+function lineIndexContaining(lines: string[], keywords: string[]): number {
+  return lines.findIndex((line) => keywords.some((k) => line.includes(k)));
+}
+
+/** URL行かどうか（次行探索で日付として誤認しないよう除外するため） */
+function looksLikeUrl(line: string): boolean {
+  return /^(?:https?:\/\/|www\.)/i.test(line);
+}
+
+/** 次行探索で日付候補として試す価値が無い行かどうか（URL/価格/電話番号等） */
+function looksLikeNonDateLine(line: string): boolean {
+  if (!line) return true;
+  if (looksLikeUrl(line)) return true;
+  return false;
+}
+
 /**
  * 日付フィールドを抽出。
  * - キーワード行があり日付が取れれば resolveDate
+ * - キーワード行自体に日付が無い場合、直後の1〜2行を探索し、最初に有効な日付として
+ *   解釈できた行を採用する（【応募期間】等のラベル行と実際の日付が別行に分かれている
+ *   投稿形式に対応。URL行は誤認防止のため探索対象から除外する。2026-08、実データで確認）。
  * - キーワード行はあるが「未公開/後日/未定」等なら not_published
  */
 function fieldDate(body: string, keywords: string[], post: string | null): ResolvedDate {
-  const line = lineContaining(body, keywords);
-  if (!line) return emptyResolved();
+  const lines = body.split(/\n+/).map((l) => l.trim());
+  const idx = lineIndexContaining(lines, keywords);
+  if (idx === -1) return emptyResolved();
+  const line = lines[idx];
   const rd = resolveDate(line, post);
   if (rd.precision !== "unknown") return rd;
+
+  for (let offset = 1; offset <= 2; offset++) {
+    const nextLine = lines[idx + offset];
+    if (nextLine === undefined || looksLikeNonDateLine(nextLine)) continue;
+    const nextResolved = resolveDate(nextLine, post);
+    if (nextResolved.precision !== "unknown") return nextResolved;
+  }
+
   if (hasAny(line, NOT_PUBLISHED_SIGNALS) || hasAny(body, NOT_PUBLISHED_SIGNALS)) {
     return { ...emptyResolved(), status: "not_published", rawText: line };
   }
