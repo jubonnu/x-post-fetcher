@@ -32,9 +32,9 @@ function makeLottery(overrides: Partial<LotteryRow> & { id: number }): LotteryRo
   };
 }
 
-function renderPage() {
+function renderPage(initialEntries: string[] = ["/"]) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <LotteryListPage />
     </MemoryRouter>
   );
@@ -288,6 +288,25 @@ describe("LotteryListPage", () => {
   });
 
   describe("X投稿日の範囲フィルタ", () => {
+    it("URLに絞り込み日付が入っていれば、再マウント後も日付入力欄に復元される（編集画面から戻っても消えない）", async () => {
+      // 編集画面への遷移・「戻る」でLotteryListPageは一度アンマウント→再マウントされるため、
+      // ローカルstateではなくURLのクエリパラメータで保持していることを確認する回帰テスト。
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage(["/?publishedFrom=2026-08-01&publishedTo=2026-08-10"]);
+
+      await waitFor(() => {
+        const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+        expect(lastCall).toContain("sourcePostPublishedAtFrom=");
+        expect(lastCall).toContain("sourcePostPublishedAtTo=");
+      });
+      expect(screen.getByLabelText("X投稿日（開始）")).toHaveValue("2026-08-01");
+      expect(screen.getByLabelText("X投稿日（終了）")).toHaveValue("2026-08-10");
+      expect(screen.getByRole("button", { name: "クリア" })).toBeInTheDocument();
+    });
+
     it("開始日を指定すると、sourcePostPublishedAtFromを付けて再取得しページも0に戻る", async () => {
       const apiRequestSpy = vi
         .spyOn(client, "apiRequest")

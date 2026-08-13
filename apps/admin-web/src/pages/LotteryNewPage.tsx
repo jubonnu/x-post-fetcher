@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { apiRequest, ApiError } from "../api/client";
 import type { LotteryDetailResponse } from "../types";
 import { fromDatetimeLocalValue } from "../utils/datetime";
@@ -68,7 +68,11 @@ export function LotteryNewPage() {
     <div className="page">
       <div className="header-row">
         <h1>抽選を手動で追加</h1>
-        <Link to="/">一覧へ戻る</Link>
+        {/* 一覧の絞り込み（タブ・X投稿日フィルタ等）を維持したまま戻るため、固定URLではなく
+            ブラウザ履歴を1つ戻る。 */}
+        <button type="button" className="secondary" onClick={() => navigate(-1)}>
+          一覧へ戻る
+        </button>
       </div>
 
       <form className="card" onSubmit={handleCreate}>
@@ -139,7 +143,7 @@ export function LotteryNewPage() {
         <button type="submit" className="primary" disabled={saving}>
           {saving ? "作成中…" : "作成"}
         </button>
-        <button type="button" className="secondary" style={{ marginLeft: 8 }} onClick={() => navigate("/")}>
+        <button type="button" className="secondary" style={{ marginLeft: 8 }} onClick={() => navigate(-1)}>
           キャンセル
         </button>
       </form>

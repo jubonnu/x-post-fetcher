@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiRequest, ApiError } from "../api/client";
 import { VerificationBadge } from "../components/VerificationBadge";
 import { useAuth } from "../auth/AuthContext";
@@ -97,8 +97,12 @@ export function LotteryListPage() {
   const { admin, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("needsReview");
   const [page, setPage] = useState(0);
-  const [publishedFrom, setPublishedFrom] = useState("");
-  const [publishedTo, setPublishedTo] = useState("");
+  // X投稿日の絞り込みはURLのクエリパラメータで保持する（一覧→編集画面→一覧と遷移して戻っても
+  // 選択した日付が消えないようにするため。ローカルstateだとページ遷移でコンポーネントが
+  // アンマウントされ消えてしまう）。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const publishedFrom = searchParams.get("publishedFrom") ?? "";
+  const publishedTo = searchParams.get("publishedTo") ?? "";
   const [items, setItems] = useState<LotteryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -145,19 +149,33 @@ export function LotteryListPage() {
   }
 
   function handlePublishedFromChange(value: string) {
-    setPublishedFrom(value);
     setPage(0);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set("publishedFrom", value);
+      else next.delete("publishedFrom");
+      return next;
+    });
   }
 
   function handlePublishedToChange(value: string) {
-    setPublishedTo(value);
     setPage(0);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set("publishedTo", value);
+      else next.delete("publishedTo");
+      return next;
+    });
   }
 
   function clearPublishedFilter() {
-    setPublishedFrom("");
-    setPublishedTo("");
     setPage(0);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("publishedFrom");
+      next.delete("publishedTo");
+      return next;
+    });
   }
 
   async function handleApprove(id: number) {

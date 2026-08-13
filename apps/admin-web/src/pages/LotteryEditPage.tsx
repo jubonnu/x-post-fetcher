@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { apiRequest, ApiError } from "../api/client";
 import { VerificationBadge } from "../components/VerificationBadge";
 import type { LotteryDetailResponse, LotteryListResponse, LotteryRow } from "../types";
@@ -150,7 +150,7 @@ export function LotteryEditPage() {
     setMergeError(null);
     try {
       await apiRequest(`/admin/lotteries/${id}/merge-into`, { method: "POST", body: { targetId } });
-      navigate("/");
+      navigate(-1);
     } catch (e) {
       setMergeError(e instanceof ApiError ? e.message : "統合に失敗しました");
     } finally {
@@ -176,7 +176,11 @@ export function LotteryEditPage() {
     <div className="page">
       <div className="header-row">
         <h1>抽選編集</h1>
-        <Link to="/">一覧へ戻る</Link>
+        {/* 一覧の絞り込み（タブ・X投稿日フィルタ等）を維持したまま戻るため、固定URLではなく
+            ブラウザ履歴を1つ戻る（一覧から遷移してきた場合、直前のURLは常に一覧のURLになる）。 */}
+        <button type="button" className="secondary" onClick={() => navigate(-1)}>
+          一覧へ戻る
+        </button>
       </div>
 
       <div className="card" style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 14 }}>
@@ -318,7 +322,7 @@ export function LotteryEditPage() {
         <button type="submit" className="primary" disabled={saving}>
           {saving ? "保存中…" : "保存"}
         </button>
-        <button type="button" className="secondary" style={{ marginLeft: 8 }} onClick={() => navigate("/")}>
+        <button type="button" className="secondary" style={{ marginLeft: 8 }} onClick={() => navigate(-1)}>
           キャンセル
         </button>
       </form>

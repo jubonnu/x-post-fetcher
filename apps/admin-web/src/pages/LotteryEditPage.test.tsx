@@ -33,8 +33,10 @@ function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
 }
 
 function renderEditPage(id = "42") {
+  // "戻る"はブラウザ履歴を1つ戻る実装のため、一覧("/")を経由してから遷移してきた状態を再現する
+  // （historyが無いとnavigate(-1)が何もしない）。
   return render(
-    <MemoryRouter initialEntries={[`/lotteries/${id}`]}>
+    <MemoryRouter initialEntries={["/", `/lotteries/${id}`]} initialIndex={1}>
       <Routes>
         <Route path="/lotteries/:id" element={<LotteryEditPage />} />
         <Route path="/" element={<div>一覧画面</div>} />
