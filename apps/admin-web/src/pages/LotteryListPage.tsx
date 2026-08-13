@@ -24,6 +24,15 @@ function displayStore(item: LotteryRow): string {
   return item.storeNameRaw?.trim() || item.normalizedStoreName?.trim() || "店舗情報なし";
 }
 
+/** 元投稿がXに投稿された日時を表示用に整形する（実際のX投稿と突き合わせて確認するため）。 */
+function displayPublishedAt(item: LotteryRow): string | null {
+  if (!item.sourcePostPublishedAt) return null;
+  const d = new Date(item.sourcePostPublishedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `X投稿日時: ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** タブごとのサーバー側フィルタ条件をクエリ文字列へ変換する。 */
 function filterQueryFor(tab: Tab): string {
   if (tab === "approved") return "verificationStatus=approved";
@@ -135,6 +144,7 @@ export function LotteryListPage() {
             <div className="lottery-info">
               <div className="title">{displayTitle(item)}</div>
               <div className="muted">{displayStore(item)}</div>
+              {displayPublishedAt(item) ? <div className="muted">{displayPublishedAt(item)}</div> : null}
               <VerificationBadge status={item.verificationStatus} />
             </div>
             <div className="lottery-actions">

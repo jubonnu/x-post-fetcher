@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { migrate } from "drizzle-orm/libsql/migrator";
 import { createDb } from "../src/db/client.node.ts";
 import { createApp } from "../src/app.ts";
-import { lotteries } from "../src/db/schema.ts";
+import { lotteries, sourcePosts } from "../src/db/schema.ts";
 import type { Env } from "../src/env.ts";
 
 const DB_FILE = resolve(process.cwd(), `.tmp-admin-lotteries-${Date.now()}.db`);
@@ -36,6 +36,14 @@ async function insertLottery(overrides: Partial<typeof lotteries.$inferInsert> =
   return row.id;
 }
 
+async function insertSourcePost(overrides: Partial<typeof sourcePosts.$inferInsert> = {}): Promise<number> {
+  const [row] = await db
+    .insert(sourcePosts)
+    .values({ externalPostId: `ext-${Date.now()}-${Math.random()}`, ...overrides })
+    .returning();
+  return row.id;
+}
+
 let adminToken: string;
 
 beforeAll(async () => {
@@ -60,6 +68,26 @@ describe("GET /admin/lotteries", () => {
   it("認証無しは401", async () => {
     const res = await app.request("/admin/lotteries");
     expect(res.status).toBe(401);
+  });
+
+  it("sourcePostPublishedAtに元投稿のX投稿日時が入る（管理者が実際の投稿と突き合わせるため）", async () => {
+    const sourcePostId = await insertSourcePost({ publishedAt: "2026-08-11T06:15:24.000Z" });
+    const id = await insertLottery({ productNameRaw: "投稿日時テスト商品", sourcePostId });
+
+    const res = await app.request("/admin/lotteries?search=投稿日時テスト商品", { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { id: number; sourcePostPublishedAt: string | null }[] };
+    const item = body.items.find((i) => i.id === id);
+    expect(item?.sourcePostPublishedAt).toBe("2026-08-11T06:15:24.000Z");
+  });
+
+  it("sourcePostIdが無い抽選はsourcePostPublishedAtがnullになる（例外にしない）", async () => {
+    const id = await insertLottery({ productNameRaw: "投稿元なし商品", sourcePostId: null });
+
+    const res = await app.request("/admin/lotteries?search=投稿元なし商品", { headers: authHeaders() });
+    const body = (await res.json()) as { items: { id: number; sourcePostPublishedAt: string | null }[] };
+    const item = body.items.find((i) => i.id === id);
+    expect(item?.sourcePostPublishedAt ?? null).toBeNull();
   });
 
   it("verificationStatusで絞り込める（rejected済みも一覧に含まれる）", async () => {

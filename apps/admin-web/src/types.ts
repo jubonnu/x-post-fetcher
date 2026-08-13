@@ -28,6 +28,8 @@ export interface LotteryRow {
   rejectedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** 元投稿がXに投稿された日時（一覧APIのみ返す。詳細APIでは undefined）。Phase 8。 */
+  sourcePostPublishedAt?: string | null;
 }
 
 export interface LotteryListResponse {

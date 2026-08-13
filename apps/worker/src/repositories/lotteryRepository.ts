@@ -6,6 +6,7 @@ import {
   lotteries,
   lotteryFieldHistory,
   lotterySources,
+  sourcePosts,
   type LotteryRow,
   type LotterySourceRow,
   type LotteryFieldHistoryRow,
@@ -519,6 +520,16 @@ export interface ListLotteriesForAdminOptions {
   offset?: number;
 }
 
+/** 管理画面の抽選行（`LotteryRow`に加え、元投稿がXに投稿された日時を持つ）。 */
+export interface AdminLotteryRow extends LotteryRow {
+  sourcePostPublishedAt: string | null;
+}
+
+export interface ListLotteriesForAdminResult {
+  lotteries: AdminLotteryRow[];
+  total: number;
+}
+
 /**
  * 管理画面（Phase 7）の一覧用。`listLotteriesByOffset`（内部review-items用）と異なり、
  * rejected済みも含めた全件を対象にする（管理者は却下済みも見て再承認できる必要があるため）。
@@ -526,8 +537,12 @@ export interface ListLotteriesForAdminOptions {
  *
  * ページネーション必須（Phase 7の初期実装ではlimit=100固定・offset未使用だったため、
  * 100件を超えるデータでは「要確認」等のタブから古い抽選が一切見えなくなる不具合があった）。
+ *
+ * `sourcePostPublishedAt`は、この抽選を最初に作成した投稿（`lotteries.sourcePostId`）が
+ * 実際にXに投稿された日時（管理者が実際のX投稿と突き合わせて確認できるようにするため、Phase 8）。
+ * 統合で複数の投稿が寄与している場合も、あくまで最初の投稿の日時を返す。
  */
-export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAdminOptions = {}): Promise<ListLotteriesByOffsetResult> {
+export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAdminOptions = {}): Promise<ListLotteriesForAdminResult> {
   const { verificationStatus, excludeVerificationStatuses, search, limit = 20, offset = 0 } = opts;
 
   const conditions = [eq(lotteries.lifecycleStatus, "active")];
@@ -552,7 +567,14 @@ export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAd
   const where = and(...conditions);
 
   const [rows, [{ total }]] = await Promise.all([
-    db.select().from(lotteries).where(where).orderBy(desc(lotteries.createdAt)).limit(Math.min(limit, 100)).offset(offset),
+    db
+      .select({ ...getTableColumns(lotteries), sourcePostPublishedAt: sourcePosts.publishedAt })
+      .from(lotteries)
+      .leftJoin(sourcePosts, eq(sourcePosts.id, lotteries.sourcePostId))
+      .where(where)
+      .orderBy(desc(lotteries.createdAt))
+      .limit(Math.min(limit, 100))
+      .offset(offset),
     db.select({ total: count() }).from(lotteries).where(where),
   ]);
 

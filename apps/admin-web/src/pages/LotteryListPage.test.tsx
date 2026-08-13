@@ -177,6 +177,29 @@ describe("LotteryListPage", () => {
     expect(within(row as HTMLElement).getByRole("button", { name: "却下" })).toBeInTheDocument();
   });
 
+  it("sourcePostPublishedAtがあれば「X投稿日時」を表示する", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({
+      items: [makeLottery({ id: 11, sourcePostPublishedAt: "2026-08-11T06:15:24.000Z" })],
+      total: 1,
+    } satisfies LotteryListResponse);
+
+    renderPage();
+
+    expect(await screen.findByText(/X投稿日時: 2026\/08\/11/)).toBeInTheDocument();
+  });
+
+  it("sourcePostPublishedAtが無ければ「X投稿日時」を表示しない", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({
+      items: [makeLottery({ id: 12, sourcePostPublishedAt: null })],
+      total: 1,
+    } satisfies LotteryListResponse);
+
+    renderPage();
+    await screen.findByText("商品12");
+
+    expect(screen.queryByText(/X投稿日時/)).not.toBeInTheDocument();
+  });
+
   it("取得に失敗するとエラーメッセージを表示する", async () => {
     vi.spyOn(client, "apiRequest").mockRejectedValue(new client.ApiError("SERVICE_BUSY", "サーバーが混雑しています", 503));
 
