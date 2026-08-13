@@ -100,6 +100,10 @@ export const lotteries = sqliteTable("lotteries", {
   resolvedApplicationUrl: text("resolved_application_url"),
   applicationUrlHttpStatus: integer("application_url_http_status"),
   urlResolvedAt: text("url_resolved_at"),
+  // 応募ページが複数ある場合の追加分（JSON配列の文字列、Phase 9）。1件目は既存の
+  // applicationUrl/resolvedApplicationUrlと同期させ、単一URL前提の既存ロジック（URL解決ジョブ・
+  // 同一抽選マッチングのドメイン比較・モバイル側フォールバック表示）はそのまま動作させる。
+  applicationUrls: text("application_urls"),
   officialInformationUrl: text("official_information_url"),
   appDownloadUrl: text("app_download_url"),
   // 管理画面（admin web）からのみ設定される。R2に保存した商品画像の公開URL（Phase 7）。

@@ -60,6 +60,33 @@ function verification(l: ExtractedLottery): string {
   return fields.some((f) => f.status === "conflicting") ? "conflicting" : "extracted";
 }
 
+/** 応募ページURLの配列をDB保存用のJSON文字列へ（空配列/未指定はnull）。 */
+function serializeApplicationUrls(urls: string[] | null | undefined): string | null {
+  if (!urls || urls.length === 0) return null;
+  return JSON.stringify(urls);
+}
+
+/** DB保存されたJSON文字列を応募ページURLの配列へ（不正/未設定はnull）。 */
+export function parseApplicationUrls(raw: string | null | undefined): string[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.every((v) => typeof v === "string") ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * レスポンス用に`applicationUrls`をJSON文字列から配列へ変換した行を返す（DB上はJSON文字列のまま、
+ * API応答でだけ配列にする。公開API・管理API共通）。
+ */
+export function withParsedApplicationUrls<T extends { applicationUrls: string | null }>(
+  row: T
+): Omit<T, "applicationUrls"> & { applicationUrls: string[] | null } {
+  return { ...row, applicationUrls: parseApplicationUrls(row.applicationUrls) };
+}
+
 /** ExtractedLottery を lotteries 行（正規化込み）へ変換する。 */
 export function toLotteryRow(sourcePostId: number, l: ExtractedLottery) {
   return {
@@ -84,6 +111,7 @@ export function toLotteryRow(sourcePostId: number, l: ExtractedLottery) {
     purchaseStartAt: l.purchaseStart.at,
     purchaseDeadlineAt: l.purchaseDeadline.at ?? l.purchaseDeadline.date,
     applicationUrl: l.applicationUrl,
+    applicationUrls: serializeApplicationUrls(l.applicationUrl ? [l.applicationUrl] : null),
     officialInformationUrl: l.officialInformationUrl,
     appDownloadUrl: l.appDownloadUrl,
     applicationMethod: l.applicationMethod,
@@ -624,6 +652,8 @@ export interface AdminLotteryUpdateInput {
   purchaseDeadlineAt?: string | null;
   applicationMethod?: string | null;
   applicationUrl?: string | null;
+  /** 応募ページURLの複数指定（Phase 9）。指定時は1件目をapplicationUrl/resolvedApplicationUrlにも同期する。 */
+  applicationUrls?: string[] | null;
   imageUrl?: string | null;
 }
 
@@ -661,6 +691,17 @@ export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminL
     // 管理者の修正が確実に反映されるよう両方へ書き込む。自動解決の追跡情報は無効化する。
     patch.applicationUrl = input.applicationUrl;
     patch.resolvedApplicationUrl = input.applicationUrl;
+    patch.applicationUrlHttpStatus = null;
+    patch.urlResolvedAt = null;
+  }
+  if (input.applicationUrls !== undefined) {
+    // 1件目を既存の単一URL項目（applicationUrl/resolvedApplicationUrl）にも同期し、
+    // URL解決ジョブ・同一抽選マッチングのドメイン比較・モバイル側フォールバック表示が
+    // 従来通り動作するようにする。
+    const urls = (input.applicationUrls ?? []).map((u) => u.trim()).filter((u) => u.length > 0);
+    patch.applicationUrls = serializeApplicationUrls(urls.length > 0 ? urls : null);
+    patch.applicationUrl = urls[0] ?? null;
+    patch.resolvedApplicationUrl = urls[0] ?? null;
     patch.applicationUrlHttpStatus = null;
     patch.urlResolvedAt = null;
   }
@@ -703,6 +744,7 @@ export async function createLotteryByAdmin(db: DbOrTx, input: AdminLotteryCreate
       purchaseDeadlineAt: input.purchaseDeadlineAt ?? null,
       applicationMethod: input.applicationMethod ?? null,
       applicationUrl: input.applicationUrl ?? null,
+      applicationUrls: serializeApplicationUrls(input.applicationUrl ? [input.applicationUrl] : null),
       resolvedApplicationUrl: input.applicationUrl ?? null,
       status: "open",
       verificationStatus: "extracted",

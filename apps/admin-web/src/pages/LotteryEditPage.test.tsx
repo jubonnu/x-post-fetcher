@@ -90,6 +90,116 @@ describe("LotteryEditPage", () => {
     expect(await screen.findByText("保存しました")).toBeInTheDocument();
   });
 
+  describe("応募ページURL（複数追加）", () => {
+    it("既存のapplicationUrlsがあれば、その件数分の入力欄が表示される", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ applicationUrls: ["https://example.com/a", "https://example.com/b"] }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+
+      expect(await screen.findByDisplayValue("https://example.com/a")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("https://example.com/b")).toBeInTheDocument();
+    });
+
+    it("applicationUrlsが無くapplicationUrlのみあれば、1件だけ入力欄が表示される", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ applicationUrl: "https://example.com/single", applicationUrls: null }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+
+      expect(await screen.findByDisplayValue("https://example.com/single")).toBeInTheDocument();
+      expect(screen.getAllByLabelText(/応募ページURL/)).toHaveLength(1);
+    });
+
+    it("「＋ URLを追加」で入力欄が増え、保存すると入力した全URLが配列で送信される", async () => {
+      const apiRequestSpy = vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
+        if (path === "/admin/lotteries/42" && options?.method === "PATCH") {
+          return { lottery: makeLottery(), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+        }
+        if (path === "/admin/lotteries/42") {
+          return { lottery: makeLottery(), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+        }
+        throw new Error(`unexpected path: ${path}`);
+      });
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      fireEvent.click(screen.getByRole("button", { name: "＋ URLを追加" }));
+      fireEvent.change(screen.getByLabelText("応募ページURL 1"), { target: { value: "https://example.com/1" } });
+      fireEvent.click(screen.getByRole("button", { name: "＋ URLを追加" }));
+      fireEvent.change(screen.getByLabelText("応募ページURL 2"), { target: { value: "https://example.com/2" } });
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+      await waitFor(() =>
+        expect(apiRequestSpy).toHaveBeenCalledWith(
+          "/admin/lotteries/42",
+          expect.objectContaining({
+            method: "PATCH",
+            body: expect.objectContaining({ applicationUrls: ["https://example.com/1", "https://example.com/2"] }),
+          })
+        )
+      );
+    });
+
+    it("「削除」ボタンでその行の入力欄が消え、保存内容にも含まれない", async () => {
+      const apiRequestSpy = vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
+        if (path === "/admin/lotteries/42" && options?.method === "PATCH") {
+          return { lottery: makeLottery(), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+        }
+        return { lottery: makeLottery({ applicationUrls: ["https://example.com/a", "https://example.com/b"] }), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+      });
+
+      renderEditPage();
+      await screen.findByDisplayValue("https://example.com/a");
+
+      const deleteButtons = screen.getAllByRole("button", { name: "削除" });
+      fireEvent.click(deleteButtons[0]);
+
+      expect(screen.queryByDisplayValue("https://example.com/a")).not.toBeInTheDocument();
+      expect(screen.getByDisplayValue("https://example.com/b")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+      await waitFor(() =>
+        expect(apiRequestSpy).toHaveBeenCalledWith(
+          "/admin/lotteries/42",
+          expect.objectContaining({
+            method: "PATCH",
+            body: expect.objectContaining({ applicationUrls: ["https://example.com/b"] }),
+          })
+        )
+      );
+    });
+
+    it("空欄の行は保存時に除外される", async () => {
+      const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery(),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      fireEvent.click(screen.getByRole("button", { name: "＋ URLを追加" }));
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+      await waitFor(() =>
+        expect(apiRequestSpy).toHaveBeenCalledWith(
+          "/admin/lotteries/42",
+          expect.objectContaining({ method: "PATCH", body: expect.objectContaining({ applicationUrls: [] }) })
+        )
+      );
+    });
+  });
+
   it("画像を選択するとアップロードされ、プレビューに反映される", async () => {
     vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
       if (path === "/admin/lotteries/42") {

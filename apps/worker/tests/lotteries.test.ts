@@ -283,4 +283,28 @@ describe("GET /lotteries/:id", () => {
     const res = await get("/lotteries/abc");
     expect(res.status).toBe(400);
   });
+
+  it("applicationUrlsはDB上のJSON文字列から配列へ変換されて返る", async () => {
+    const [row] = await db
+      .insert(lotteries)
+      .values({
+        productNameRaw: "複数URLテスト",
+        normalizedProductName: "複数URLテスト",
+        storeNameRaw: "テスト店舗",
+        verificationStatus: "extracted",
+        status: "open",
+        applicationUrls: JSON.stringify(["https://example.com/a", "https://example.com/b"]),
+      })
+      .returning();
+
+    const res = await get(`/lotteries/${row.id}`);
+    const json: any = await res.json();
+    expect(json.lottery.applicationUrls).toEqual(["https://example.com/a", "https://example.com/b"]);
+  });
+
+  it("applicationUrls未設定はnullで返る（文字列のままではない）", async () => {
+    const res = await get(`/lotteries/${ids.acceptingNear}`);
+    const json: any = await res.json();
+    expect(json.lottery.applicationUrls).toBeNull();
+  });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE `lotteries` ADD `application_urls` text;

@@ -11,6 +11,7 @@ import {
   mergeLotteryIntoTarget,
   rejectLotteryByAdmin,
   updateLotteryByAdmin,
+  withParsedApplicationUrls,
   type AdminLotteryCreateInput,
   type AdminLotteryUpdateInput,
 } from "../repositories/lotteryRepository.ts";
@@ -66,6 +67,8 @@ const updateLotterySchema = z.object({
   purchaseDeadlineAt: z.string().datetime().nullable().optional(),
   applicationMethod: nullableText.optional(),
   applicationUrl: nullableText.optional(),
+  // 応募ページURLの複数指定（Phase 9）。空配列/nullは「全削除」の意図。
+  applicationUrls: z.array(z.string().max(2000)).max(20).nullable().optional(),
 });
 
 const rejectBodySchema = z.object({ reason: z.string().max(2000).nullable().optional() });
@@ -114,7 +117,7 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
 
     const db = c.get("db");
     const result = await listLotteriesForAdmin(db, parsed.data);
-    return c.json({ items: result.lotteries, total: result.total });
+    return c.json({ items: result.lotteries.map(withParsedApplicationUrls), total: result.total });
   });
 
   app.post("/admin/lotteries", requireAdminAuth, async (c) => {
@@ -127,7 +130,7 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
     const db = c.get("db");
     const id = await createLotteryByAdmin(db, parsed.data as AdminLotteryCreateInput);
     const created = await getLotteryWithDetails(db, id);
-    return c.json(created, 201);
+    return c.json({ ...created, lottery: withParsedApplicationUrls(created!.lottery) }, 201);
   });
 
   app.get("/admin/lotteries/:id", requireAdminAuth, async (c) => {
@@ -137,7 +140,7 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
     const db = c.get("db");
     const detail = await getLotteryWithDetails(db, id);
     if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
-    return c.json(detail);
+    return c.json({ ...detail, lottery: withParsedApplicationUrls(detail.lottery) });
   });
 
   app.post("/admin/lotteries/:id/approve", requireAdminAuth, async (c) => {
@@ -185,7 +188,7 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
 
     await updateLotteryByAdmin(db, id, parsed.data as AdminLotteryUpdateInput);
     const updated = await getLotteryWithDetails(db, id);
-    return c.json(updated);
+    return c.json({ ...updated, lottery: withParsedApplicationUrls(updated!.lottery) });
   });
 
   app.post("/admin/lotteries/:id/image", requireAdminAuth, async (c) => {

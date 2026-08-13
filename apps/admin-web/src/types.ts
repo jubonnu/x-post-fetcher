@@ -18,6 +18,8 @@ export interface LotteryRow {
   resultAnnouncementDate: string | null;
   purchaseDeadlineAt: string | null;
   applicationUrl: string | null;
+  /** 応募ページURLの複数指定（Phase 9）。1件目はapplicationUrlと同じ値。 */
+  applicationUrls?: string[] | null;
   resolvedApplicationUrl: string | null;
   applicationMethod: string | null;
   imageUrl: string | null;

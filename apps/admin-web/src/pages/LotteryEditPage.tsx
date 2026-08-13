@@ -12,10 +12,16 @@ interface FormState {
   resultAnnouncementAt: string;
   purchaseDeadlineAt: string;
   applicationMethod: string;
-  applicationUrl: string;
+  applicationUrls: string[];
 }
 
 function toFormState(lottery: LotteryRow): FormState {
+  const urls =
+    lottery.applicationUrls && lottery.applicationUrls.length > 0
+      ? lottery.applicationUrls
+      : lottery.applicationUrl
+        ? [lottery.applicationUrl]
+        : [];
   return {
     productNameRaw: lottery.productNameRaw ?? "",
     storeNameRaw: lottery.storeNameRaw ?? "",
@@ -23,7 +29,7 @@ function toFormState(lottery: LotteryRow): FormState {
     resultAnnouncementAt: toDatetimeLocalValue(lottery.resultAnnouncementAt),
     purchaseDeadlineAt: toDatetimeLocalValue(lottery.purchaseDeadlineAt),
     applicationMethod: lottery.applicationMethod ?? "",
-    applicationUrl: lottery.applicationUrl ?? "",
+    applicationUrls: urls,
   };
 }
 
@@ -64,8 +70,20 @@ export function LotteryEditPage() {
     void load();
   }, [load]);
 
-  function updateField<K extends keyof FormState>(key: K, value: string) {
+  function updateField<K extends Exclude<keyof FormState, "applicationUrls">>(key: K, value: string) {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }
+
+  function updateApplicationUrl(index: number, value: string) {
+    setForm((prev) => (prev ? { ...prev, applicationUrls: prev.applicationUrls.map((u, i) => (i === index ? value : u)) } : prev));
+  }
+
+  function addApplicationUrl() {
+    setForm((prev) => (prev ? { ...prev, applicationUrls: [...prev.applicationUrls, ""] } : prev));
+  }
+
+  function removeApplicationUrl(index: number) {
+    setForm((prev) => (prev ? { ...prev, applicationUrls: prev.applicationUrls.filter((_, i) => i !== index) } : prev));
   }
 
   async function handleSave(e: FormEvent) {
@@ -84,7 +102,7 @@ export function LotteryEditPage() {
           resultAnnouncementAt: fromDatetimeLocalValue(form.resultAnnouncementAt),
           purchaseDeadlineAt: fromDatetimeLocalValue(form.purchaseDeadlineAt),
           applicationMethod: form.applicationMethod,
-          applicationUrl: form.applicationUrl,
+          applicationUrls: form.applicationUrls.map((u) => u.trim()).filter((u) => u.length > 0),
         },
       });
       setLottery(res.lottery);
@@ -312,8 +330,24 @@ export function LotteryEditPage() {
         </div>
 
         <div className="field">
-          <label htmlFor="applicationUrl">応募ページ（URL）</label>
-          <input id="applicationUrl" type="text" value={form.applicationUrl} onChange={(e) => updateField("applicationUrl", e.target.value)} />
+          <label>応募ページ（URL）</label>
+          {form.applicationUrls.map((url, index) => (
+            <div key={index} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+              <input
+                type="text"
+                aria-label={`応募ページURL ${index + 1}`}
+                value={url}
+                onChange={(e) => updateApplicationUrl(index, e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="danger" onClick={() => removeApplicationUrl(index)}>
+                削除
+              </button>
+            </div>
+          ))}
+          <button type="button" className="secondary" onClick={addApplicationUrl}>
+            ＋ URLを追加
+          </button>
         </div>
 
         {error ? <p className="error-text">{error}</p> : null}

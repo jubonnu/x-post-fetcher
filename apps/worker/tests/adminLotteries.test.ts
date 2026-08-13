@@ -227,6 +227,7 @@ describe("POST /admin/lotteries", () => {
     expect(body.lottery.applicationMethod).toBe("電話で応募");
     expect(body.lottery.applicationUrl).toBe("https://example.com/manual");
     expect(body.lottery.verificationStatus).toBe("extracted");
+    expect((body.lottery as unknown as { applicationUrls: string[] }).applicationUrls).toEqual(["https://example.com/manual"]);
 
     // 一覧にも表示されることを確認
     const listRes = await app.request("/admin/lotteries?search=手動追加した商品", { headers: authHeaders() });
@@ -300,6 +301,58 @@ describe("PATCH /admin/lotteries/:id", () => {
     expect(body.lottery.applicationUrl).toBe("https://example.com/apply");
     // resolvedApplicationUrlが優先表示されるため、両方に反映されている必要がある
     expect(body.lottery.resolvedApplicationUrl).toBe("https://example.com/apply");
+  });
+
+  it("applicationUrlsで複数の応募URLを設定でき、1件目がapplicationUrl/resolvedApplicationUrlにも同期される", async () => {
+    const id = await insertLottery();
+
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({
+        applicationUrls: ["https://example.com/a", "https://example.com/b", "https://example.com/c"],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      lottery: {
+        applicationUrl: string;
+        resolvedApplicationUrl: string;
+        applicationUrls: string[];
+      };
+    };
+    expect(body.lottery.applicationUrls).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
+    expect(body.lottery.applicationUrl).toBe("https://example.com/a");
+    expect(body.lottery.resolvedApplicationUrl).toBe("https://example.com/a");
+  });
+
+  it("applicationUrlsに空配列を送ると全て削除される（applicationUrl/resolvedApplicationUrlもnullになる）", async () => {
+    const id = await insertLottery({ applicationUrl: "https://example.com/old", applicationUrls: JSON.stringify(["https://example.com/old"]) });
+
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ applicationUrls: [] }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      lottery: { applicationUrl: string | null; resolvedApplicationUrl: string | null; applicationUrls: string[] | null };
+    };
+    expect(body.lottery.applicationUrls).toBeNull();
+    expect(body.lottery.applicationUrl).toBeNull();
+    expect(body.lottery.resolvedApplicationUrl).toBeNull();
+  });
+
+  it("applicationUrlsを指定しなければ既存値を保持する", async () => {
+    const id = await insertLottery({ applicationUrl: "https://example.com/keep", applicationUrls: JSON.stringify(["https://example.com/keep"]) });
+
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ productNameRaw: "タイトルだけ変更" }),
+    });
+    const body = (await res.json()) as { lottery: { applicationUrls: string[] } };
+    expect(body.lottery.applicationUrls).toEqual(["https://example.com/keep"]);
   });
 
   it("フィールドを未指定のままにすると既存値を保持する", async () => {

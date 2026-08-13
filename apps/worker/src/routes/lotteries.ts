@@ -1,6 +1,6 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../env.ts";
-import { getLotteryWithDetails, listLotteries } from "../repositories/lotteryRepository.ts";
+import { getLotteryWithDetails, listLotteries, withParsedApplicationUrls } from "../repositories/lotteryRepository.ts";
 import { decodeLotteryListCursor, InvalidCursorError } from "../services/lotteryListCursor.ts";
 import { isParsableDate } from "../validation/limits.ts";
 
@@ -49,7 +49,7 @@ export function registerLotteries(app: Hono<AppEnv>): void {
     const result = await listLotteries(db, { cardType, verificationStatus, limit, cursor, asOf });
     return c.json({
       ok: true,
-      lotteries: result.lotteries,
+      lotteries: result.lotteries.map(withParsedApplicationUrls),
       total: result.total,
       limit,
       asOf,
@@ -68,6 +68,6 @@ export function registerLotteries(app: Hono<AppEnv>): void {
     if (!detail) {
       return c.json({ ok: false, error: "not_found" }, 404);
     }
-    return c.json({ ok: true, ...detail });
+    return c.json({ ok: true, ...detail, lottery: withParsedApplicationUrls(detail.lottery) });
   });
 }
