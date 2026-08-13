@@ -2,6 +2,21 @@ import { resolveDate, type ClassifiedUrl, type ExtractedLottery, type ResolvedDa
 import { detectCardType } from "./classifyPost.ts";
 import { NOT_PUBLISHED_SIGNALS } from "./keywords.ts";
 
+/**
+ * 複数店舗・複数商品の「まとめ投稿」で、1件ごとの見出しに使われる行頭マーカー。
+ * `assessComplexity`（analyzePost.ts）と`splitLotteries`の両方で同じ判定基準を使うため、
+ * ここで一元管理する（ズレると「複数と判定されたのに分割パターンが拾えない」不整合が起きる）。
+ * 対応: ✅/✔/・ の記号、丸数字（①〜⑳）、キーキャップ絵文字（1️⃣〜9️⃣・🔟）、▼/■/★、
+ * 半角/全角の番号リスト（1. / １．）。
+ */
+export const LIST_MARKER_PATTERN =
+  /^\s*(?:[✅✔・▼■★]|[①-⑳]|[0-9]️?⃣|\u{1F51F}|\d+[.．]|[０-９]+[.．])/u;
+
+/** 行頭のマーカーを取り除いた残り部分を返す。 */
+export function stripListMarker(line: string): string {
+  return line.replace(LIST_MARKER_PATTERN, "").trim();
+}
+
 const emptyResolved = (): ResolvedDate => ({
   at: null,
   date: null,
@@ -120,8 +135,8 @@ export function extractSingleLottery(
 
 /**
  * 1投稿を「複数の」抽選へ分割する（Phase 3）。
- *  - 店舗マーカー行（✅/✔/・ + 店舗 + 締切）が2つ以上 → まとめ投稿として店舗ごとに分割
- *    （商品はヘッダ商品、締切は各行のインライン日付）。
+ *  - 店舗マーカー行（LIST_MARKER_PATTERN + 店舗 + 締切）が2つ以上 → まとめ投稿として店舗ごとに分割
+ *    （各行が独自の「」商品名を持てばそれを使用、無ければヘッダ商品を流用。締切は各行のインライン日付）。
  *  - マーカーが無くても 商品「」が2つ以上 + 共通店舗が取れる → 商品ごとに分割。
  *  - 確実に分割できなければ null（呼び出し側は needs_review へ）。
  * 日時はルール(resolveDate)で確定し、LLM は使用しない。
@@ -133,7 +148,7 @@ export function splitLotteries(
 ): ExtractedLottery[] | null {
   const body = bodyText ?? "";
   const lines = body.split(/\n+/);
-  const markerLines = lines.filter((l) => /^\s*[✅✔・]/.test(l));
+  const markerLines = lines.filter((l) => LIST_MARKER_PATTERN.test(l));
   const headerProduct = extractHeaderProduct(body);
 
   const cardType = detectCardType(body);
@@ -166,14 +181,18 @@ export function splitLotteries(
   });
 
   // (1) 店舗マーカー行が2つ以上 → 店舗ごとに分割
+  // 各行が独自の「」商品名を持つ場合はそれを使用する（店舗ごとに商品が異なるまとめ投稿）。
+  // 無ければ従来通りヘッダ商品を共通で使う。
   if (markerLines.length >= 2) {
     return markerLines.map((line) => {
-      const rest = line.replace(/^\s*[✅✔・]\s*/, "");
-      const m = rest.match(/^([^\d]+?)\s*([\d/].*)?$/);
-      const store = (m ? m[1] : rest).trim() || null;
+      const rest = stripListMarker(line);
+      const lineProduct = extractProductName(rest);
+      const withoutProduct = lineProduct ? rest.replace(/[「『][^」』]{1,60}[」』]/, "").trim() : rest;
+      const m = withoutProduct.match(/^([^\d]+?)\s*([\d/].*)?$/);
+      const store = (m ? m[1] : withoutProduct).trim() || null;
       const dateText = m && m[2] ? m[2] : null;
       const applicationEnd = dateText ? resolveDate(dateText, postPublishedAt) : emptyResolved();
-      return make(headerProduct, store, applicationEnd);
+      return make(lineProduct ?? headerProduct, store, applicationEnd);
     });
   }
 

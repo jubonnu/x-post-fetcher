@@ -124,6 +124,32 @@ describe("classifyPostUrls / analyzePost", () => {
     expect(analysis.extractedLotteries[0].applicationEnd.date).toBe("2026-08-11");
     expect(analysis.extractedLotteries[1].applicationEnd.date).toBe("2026-08-12");
   });
+
+  it("丸数字リスト形式の複数店舗まとめも分割できる", async () => {
+    const body = "MEGAドリームex 全抽選まとめ\n①ドラスタ 8/11 23:59〆\n②ホビステ 8/12 23:59〆\n応募期間 当選発表 8/15";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(2);
+    expect(analysis.extractedLotteries.map((l) => l.storeNameRaw)).toEqual(["ドラスタ", "ホビステ"]);
+  });
+
+  it("番号リスト（1. 2.）形式でも分割できる", async () => {
+    const body = "MEGAドリームex 全抽選まとめ\n1.ドラスタ 8/11 23:59〆\n2.ホビステ 8/12 23:59〆\n応募期間 当選発表 8/15";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(2);
+    expect(analysis.extractedLotteries.map((l) => l.storeNameRaw)).toEqual(["ドラスタ", "ホビステ"]);
+  });
+
+  it("行ごとに商品が異なるまとめ投稿は、各行の「」商品名を優先して分割する", async () => {
+    const body =
+      "✅ドラスタで「メガドリームex」8/11 23:59〆\n✅ホビステで「トリプレットビート」8/12 23:59〆\n応募期間 当選発表 8/15";
+    const analysis = await analyzePost(makePost(body));
+    expect(analysis.analysisStatus).toBe("success");
+    expect(analysis.extractedLotteries).toHaveLength(2);
+    expect(analysis.extractedLotteries.map((l) => l.storeNameRaw)).toEqual(["ドラスタで", "ホビステで"]);
+    expect(analysis.extractedLotteries.map((l) => l.productNameRaw)).toEqual(["メガドリームex", "トリプレットビート"]);
+  });
 });
 
 // ルールベース解析（100% ルール・LLM なし）のケース網羅

@@ -2,7 +2,7 @@ import { computeContentHash, type AnalysisInput } from "@x-post/shared";
 import type { RawPost } from "../scraping/x/parseTweetDom.ts";
 import { classifyPost } from "./classifyPost.ts";
 import { classifyPostUrls } from "./classifyUrls.ts";
-import { extractSingleLottery, splitLotteries } from "./extractLotteryData.ts";
+import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries } from "./extractLotteryData.ts";
 
 /** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
 export const PARSER_VERSION = "phase3-rules-1";
@@ -14,7 +14,9 @@ export const PARSER_VERSION = "phase3-rules-1";
 export function assessComplexity(bodyText: string): boolean {
   const body = bodyText ?? "";
   const productCount = (body.match(/[「『][^」』]{1,60}[」』]/g) ?? []).length;
-  const storeMarkerCount = (body.match(/^[\s]*[✅✔・]/gm) ?? []).length;
+  // splitLotteriesのmarkerLines判定（LIST_MARKER_PATTERN）と同じ基準で数える
+  // （ズレると「複数と判定されたのに分割パターンが拾えない」不整合が起きるため）。
+  const storeMarkerCount = body.split(/\n+/).filter((l) => LIST_MARKER_PATTERN.test(l)).length;
   const hasMultiSection = /応募期間/.test(body) && /当選発表/.test(body);
   return productCount > 1 || storeMarkerCount > 1 || hasMultiSection;
 }

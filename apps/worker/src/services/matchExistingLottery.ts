@@ -5,12 +5,19 @@ import { extractDomain } from "@x-post/shared";
  *
  * 手順（実装計画 §matchExistingLottery に準拠）:
  *  1. **禁止条件（ハードブロック）を先に評価**。該当すればスコアに関係なく統合しない（新規扱い）。
- *  2. ブロックされなかった既存だけをスコアリング（商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5）。
+ *  2. ブロックされなかった既存だけをスコアリング（商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5
+ *     / 結果待ちボーナス15）。
  *  3. 最高スコアで判定: 80+ → merge / 50–79 → review / 49- → new。
  *
  * 注: オンライン/店頭・販売形態・抽選回（第2回等）のブロックは専用フィールド未整備のため Phase 3 では未実装
  * （カード種別・支店・締切差でブロック）。締切が未確定（unknown/not_published/store_closing_time）の場合は
  * 締切差でブロックしない。
+ *
+ * 結果待ちボーナス（15点）: 商品/店舗一致が既に40点以上あり、候補（新しい投稿）に当選発表情報が
+ * 抽出できていて、既存側にはまだ無い場合に加点する。当選発表だけの短い後続投稿（例:「当選発表しました」）
+ * は締切等の情報を再掲しないため、商品名+店舗名の完全一致だけでは70点にしか届かず自動マージの閾値(80)を
+ * 超えられない。このボーナスにより、そうした「結果待ちの続報」を確実に自動マージできるようにする
+ * （商品/店舗どちらも一致していない候補には加点しないため、無関係な抽選への誤統合リスクは抑えている）。
  */
 
 export interface MatchableLottery {
@@ -23,6 +30,8 @@ export interface MatchableLottery {
   applicationEndDate?: string | null;
   applicationEndPrecision?: string | null;
   applicationUrl?: string | null;
+  resultAnnouncementAt?: string | null;
+  resultAnnouncementDate?: string | null;
 }
 
 export interface MatchOptions {
@@ -81,7 +90,7 @@ export function hardBlockReason(a: MatchableLottery, b: MatchableLottery, opts: 
   return null;
 }
 
-/** スコアリング（0–100）。商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5。 */
+/** スコアリング（0–115）。商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5 / 結果待ちボーナス15。 */
 export function scorePair(a: MatchableLottery, b: MatchableLottery): number {
   let score = 0;
 
@@ -100,6 +109,12 @@ export function scorePair(a: MatchableLottery, b: MatchableLottery): number {
     if (sa === sb) score += 30;
     else if (partialIncludes(sa, sb)) score += 15;
   }
+
+  // 結果待ちボーナス 15: 商品/店舗一致で既に40点以上あり、候補に当選発表情報があり、既存には無い場合。
+  const productStoreScore = score;
+  const candidateHasResult = norm(a.resultAnnouncementAt).length > 0 || norm(a.resultAnnouncementDate).length > 0;
+  const existingLacksResult = norm(b.resultAnnouncementAt).length === 0 && norm(b.resultAnnouncementDate).length === 0;
+  if (productStoreScore >= 40 && candidateHasResult && existingLacksResult) score += 15;
 
   // 支店 + 地域 10（各5）
   if (bothPresent(a.normalizedStoreBranch, b.normalizedStoreBranch) && norm(a.normalizedStoreBranch) === norm(b.normalizedStoreBranch)) score += 5;

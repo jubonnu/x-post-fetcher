@@ -1,0 +1,1 @@
+ALTER TABLE `lotteries` ADD `merged_into_lottery_id` integer;

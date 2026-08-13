@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, like, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db, DbOrTx } from "../db/client.ts";
@@ -510,6 +510,11 @@ export interface ListLotteriesForAdminOptions {
    * `verificationStatus`と同時指定した場合はこちらを優先する。
    */
   excludeVerificationStatuses?: string[];
+  /**
+   * 商品名・店舗名（raw/正規化どちらも）への部分一致検索（管理画面の「重複として統合」で
+   * 統合先を探すためのもの、Phase 8）。
+   */
+  search?: string;
   limit?: number;
   offset?: number;
 }
@@ -523,7 +528,7 @@ export interface ListLotteriesForAdminOptions {
  * 100件を超えるデータでは「要確認」等のタブから古い抽選が一切見えなくなる不具合があった）。
  */
 export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAdminOptions = {}): Promise<ListLotteriesByOffsetResult> {
-  const { verificationStatus, excludeVerificationStatuses, limit = 20, offset = 0 } = opts;
+  const { verificationStatus, excludeVerificationStatuses, search, limit = 20, offset = 0 } = opts;
 
   const conditions = [eq(lotteries.lifecycleStatus, "active")];
   if (excludeVerificationStatuses && excludeVerificationStatuses.length > 0) {
@@ -532,6 +537,17 @@ export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAd
     conditions.push(or(isNull(lotteries.verificationStatus), notInArray(lotteries.verificationStatus, excludeVerificationStatuses))!);
   } else if (verificationStatus) {
     conditions.push(eq(lotteries.verificationStatus, verificationStatus));
+  }
+  if (search && search.trim().length > 0) {
+    const pattern = `%${search.trim()}%`;
+    conditions.push(
+      or(
+        like(lotteries.productNameRaw, pattern),
+        like(lotteries.storeNameRaw, pattern),
+        like(lotteries.normalizedProductName, pattern),
+        like(lotteries.normalizedStoreName, pattern)
+      )!
+    );
   }
   const where = and(...conditions);
 
@@ -611,4 +627,74 @@ export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminL
   }
 
   await db.update(lotteries).set(patch).where(eq(lotteries.id, id));
+}
+
+export type MergeLotteryError = "duplicate_not_found" | "target_not_found" | "same_lottery" | "target_already_merged";
+
+export interface MergeLotteryResult {
+  ok: true;
+  targetId: number;
+  changedFields: string[];
+}
+
+/**
+ * 管理画面から「重複として統合」（Phase 8）。duplicateId の内容を targetId へ空欄補完し
+ * （`mergeLotteryData`を自動マージと同じロジックで再利用）、`lottery_sources`/
+ * `lottery_field_history`をtarget側へ付け替え、duplicate側は`lifecycleStatus: "merged"`,
+ * `mergedIntoLotteryId: targetId`にする（物理削除しない）。
+ * 公開一覧（`listLotteries`）・管理一覧（`listLotteriesForAdmin`）はどちらも
+ * `lifecycleStatus = "active"`のみを対象にしているため、統合後は自動的に非表示になる。
+ */
+export async function mergeLotteryIntoTarget(
+  db: Db,
+  duplicateId: number,
+  targetId: number
+): Promise<MergeLotteryResult | MergeLotteryError> {
+  if (duplicateId === targetId) return "same_lottery";
+
+  return db.transaction(async (tx) => {
+    const [duplicateRows, targetRows] = await Promise.all([
+      tx.select().from(lotteries).where(eq(lotteries.id, duplicateId)),
+      tx.select().from(lotteries).where(eq(lotteries.id, targetId)),
+    ]);
+    const duplicate = duplicateRows[0];
+    const target = targetRows[0];
+    if (!duplicate) return "duplicate_not_found";
+    if (!target) return "target_not_found";
+    if (target.lifecycleStatus === "merged") return "target_already_merged";
+
+    const now = new Date().toISOString();
+    const merged = mergeLotteryData(
+      target as unknown as Record<string, string | null>,
+      duplicate as unknown as Record<string, string | null>
+    );
+
+    if (Object.keys(merged.updates).length > 0 || merged.verificationStatus !== target.verificationStatus) {
+      await tx
+        .update(lotteries)
+        .set({ ...merged.updates, verificationStatus: merged.verificationStatus, updatedAt: now })
+        .where(eq(lotteries.id, targetId));
+    }
+    for (const c of merged.changes) {
+      await tx.insert(lotteryFieldHistory).values({
+        lotteryId: targetId,
+        sourcePostId: null,
+        fieldName: c.fieldName,
+        oldValue: c.oldValue,
+        newValue: c.newValue,
+        changeType: c.changeType,
+      });
+    }
+
+    // 重複側の情報源・変更履歴をtargetへ付け替える（provenanceを保持する）。
+    await tx.update(lotterySources).set({ lotteryId: targetId }).where(eq(lotterySources.lotteryId, duplicateId));
+    await tx.update(lotteryFieldHistory).set({ lotteryId: targetId }).where(eq(lotteryFieldHistory.lotteryId, duplicateId));
+
+    await tx
+      .update(lotteries)
+      .set({ lifecycleStatus: "merged", mergedIntoLotteryId: targetId, updatedAt: now })
+      .where(eq(lotteries.id, duplicateId));
+
+    return { ok: true, targetId, changedFields: merged.changes.map((c) => c.fieldName) };
+  });
 }

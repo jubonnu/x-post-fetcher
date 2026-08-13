@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from "react"
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { apiRequest, ApiError } from "../api/client";
 import { VerificationBadge } from "../components/VerificationBadge";
-import type { LotteryDetailResponse, LotteryRow } from "../types";
+import type { LotteryDetailResponse, LotteryListResponse, LotteryRow } from "../types";
 import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../utils/datetime";
 
 interface FormState {
@@ -40,6 +40,11 @@ export function LotteryEditPage() {
   const [deletingImage, setDeletingImage] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [mergeSearch, setMergeSearch] = useState("");
+  const [mergeResults, setMergeResults] = useState<LotteryRow[] | null>(null);
+  const [mergeSearching, setMergeSearching] = useState(false);
+  const [merging, setMerging] = useState(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,6 +129,35 @@ export function LotteryEditPage() {
     }
   }
 
+  async function handleMergeSearch(e: FormEvent) {
+    e.preventDefault();
+    if (!mergeSearch.trim()) return;
+    setMergeSearching(true);
+    setMergeError(null);
+    try {
+      const res = await apiRequest<LotteryListResponse>(`/admin/lotteries?search=${encodeURIComponent(mergeSearch.trim())}`);
+      setMergeResults(res.items.filter((i) => String(i.id) !== id));
+    } catch (e) {
+      setMergeError(e instanceof ApiError ? e.message : "検索に失敗しました");
+    } finally {
+      setMergeSearching(false);
+    }
+  }
+
+  async function handleMergeInto(targetId: number) {
+    if (!window.confirm(`この抽選を #${targetId} に統合しますか？統合後、この抽選は一覧から表示されなくなります。`)) return;
+    setMerging(true);
+    setMergeError(null);
+    try {
+      await apiRequest(`/admin/lotteries/${id}/merge-into`, { method: "POST", body: { targetId } });
+      navigate("/");
+    } catch (e) {
+      setMergeError(e instanceof ApiError ? e.message : "統合に失敗しました");
+    } finally {
+      setMerging(false);
+    }
+  }
+
   async function handleApproveOrReject(action: "approve" | "reject") {
     if (action === "reject") {
       const reason = window.prompt("却下理由（任意）");
@@ -158,6 +192,50 @@ export function LotteryEditPage() {
           </button>
         ) : null}
         {lottery.rejectedReason ? <span className="muted">却下理由: {lottery.rejectedReason}</span> : null}
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h2>重複として統合</h2>
+        <p className="muted">
+          既に登録されている別の抽選と同じ内容の場合、ここで統合できます。統合するとこの抽選は一覧から消え、
+          空欄だった項目は統合先へコピーされます。
+        </p>
+        <form onSubmit={handleMergeSearch} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <input
+            type="text"
+            placeholder="統合先の商品名・店舗名で検索"
+            value={mergeSearch}
+            onChange={(e) => setMergeSearch(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <button type="submit" className="secondary" disabled={mergeSearching}>
+            {mergeSearching ? "検索中…" : "検索"}
+          </button>
+        </form>
+
+        {mergeError ? <p className="error-text">{mergeError}</p> : null}
+
+        {mergeResults ? (
+          mergeResults.length === 0 ? (
+            <p className="muted">該当する抽選が見つかりませんでした</p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
+              {mergeResults.map((r) => (
+                <li
+                  key={r.id}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid #eee" }}
+                >
+                  <span>
+                    #{r.id} {r.productNameRaw ?? "（商品名未設定）"} / {r.storeNameRaw ?? "（店舗名未設定）"}
+                  </span>
+                  <button type="button" className="primary" disabled={merging} onClick={() => void handleMergeInto(r.id)}>
+                    この抽選に統合
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : null}
       </div>
 
       <div className="card" style={{ marginBottom: 16 }}>

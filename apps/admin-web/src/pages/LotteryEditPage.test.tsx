@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LotteryEditPage } from "./LotteryEditPage";
 import * as client from "../api/client";
-import type { LotteryDetailResponse, LotteryRow } from "../types";
+import type { LotteryDetailResponse, LotteryListResponse, LotteryRow } from "../types";
 
 function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
   return {
@@ -171,6 +171,43 @@ describe("LotteryEditPage", () => {
     renderEditPage();
 
     expect(await screen.findByText("抽選が見つかりません")).toBeInTheDocument();
+  });
+
+  it("重複統合の検索結果から統合先を選ぶと、確認後にmerge-intoを呼び一覧へ戻る", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const apiRequestSpy = vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
+      if (path === "/admin/lotteries/42" && !options) {
+        return { lottery: makeLottery(), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+      }
+      if (path === "/admin/lotteries?search=%E3%83%86%E3%82%B9%E3%83%88") {
+        return {
+          items: [makeLottery({ id: 99, productNameRaw: "統合先の商品" })],
+          total: 1,
+        } satisfies LotteryListResponse;
+      }
+      if (path === "/admin/lotteries/42/merge-into" && options?.method === "POST") {
+        return { ok: true, targetId: 99, changedFields: [] };
+      }
+      throw new Error(`unexpected path: ${path}`);
+    });
+
+    renderEditPage();
+    await screen.findByDisplayValue("テスト商品");
+
+    fireEvent.change(screen.getByPlaceholderText("統合先の商品名・店舗名で検索"), { target: { value: "テスト" } });
+    fireEvent.click(screen.getByRole("button", { name: "検索" }));
+
+    expect(await screen.findByText(/統合先の商品/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "この抽選に統合" }));
+
+    await waitFor(() =>
+      expect(apiRequestSpy).toHaveBeenCalledWith("/admin/lotteries/42/merge-into", {
+        method: "POST",
+        body: { targetId: 99 },
+      })
+    );
+    expect(await screen.findByText("一覧画面")).toBeInTheDocument();
   });
 
   it("キャンセルボタンで一覧画面（/）へ戻る", async () => {

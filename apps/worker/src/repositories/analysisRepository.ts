@@ -64,7 +64,16 @@ export async function persistAnalysis(
   });
 
   // Phase 3: 同一抽選マッチングで統合 / 新規登録し、情報源・変更履歴を記録する。
-  const candidates = analysis.extractedLotteries.map((l) => toLotteryRow(sourcePostId, l));
+  // analysisStatus === "needs_review"（複数抽選の分割失敗・低信頼抽出）は、toLotteryRowが
+  // 日付競合のみで判定する verificationStatus（デフォルト "extracted"）に埋もれてしまうため、
+  // ここで明示的に "needs_review" へ引き上げる（"conflicting" 等より詳細な状態は維持する）。
+  const candidates = analysis.extractedLotteries.map((l) => {
+    const row = toLotteryRow(sourcePostId, l);
+    if (analysis.analysisStatus === "needs_review" && row.verificationStatus === "extracted") {
+      return { ...row, verificationStatus: "needs_review" };
+    }
+    return row;
+  });
   const synced = await syncLotteriesFromAnalysis(db, sourcePostId, candidates);
   return { action: "inserted", lotteryCount: synced.count, lotteryResults: synced.results };
 }

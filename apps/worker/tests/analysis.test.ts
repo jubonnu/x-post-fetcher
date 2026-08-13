@@ -143,6 +143,43 @@ describe("contentHash による再解析判定 / needs_review", () => {
     const pa = await db.select().from(postAnalyses).where(eq(postAnalyses.sourcePostId, res.sourcePostId));
     expect(pa.length).toBe(2); // 557a と 557b の2件
   });
+
+  it("analysisStatus=needs_reviewで抽出された抽選は、日付競合が無くてもverificationStatus=needs_reviewになる", async () => {
+    const sourcePostForRow = {
+      externalPostId: "558",
+      sourceUrl: "https://x.com/zabi_poc/status/558",
+      bodyRaw: "分割しきれない複数抽選投稿",
+      publishedAt: "2026-07-24T04:00:00.000Z",
+      contentHash: "hash-558",
+      fetchedAt: new Date().toISOString(),
+    };
+    const lowConfidenceAnalysis = {
+      postType: "lottery_summary",
+      isLotteryInformation: true,
+      cardType: "pokemon",
+      confidenceScore: 0.4,
+      analysisStatus: "needs_review",
+      parserVersion: "phase2-rules-1",
+      inputContentHash: "hash-558",
+      urls: [],
+      extractedLotteries: [
+        {
+          cardType: "pokemon",
+          productNameRaw: "分割できなかった商品",
+          storeNameRaw: "不明店",
+          applicationEnd: { at: null, date: null, precision: "unknown", status: "unknown" },
+        },
+      ],
+    };
+
+    const res: any = await (await post({ sourcePost: sourcePostForRow, analysis: lowConfidenceAnalysis })).json();
+    expect(res.analysis.action).toBe("inserted");
+    expect(res.analysis.lotteryCount).toBe(1);
+
+    const rows = await db.select().from(lotteries).where(eq(lotteries.sourcePostId, res.sourcePostId));
+    expect(rows.length).toBe(1);
+    expect(rows[0].verificationStatus).toBe("needs_review");
+  });
 });
 
 // 再解析判定は inputContentHash × parserVersion の2キーで行う（parserVersion 変化＝解析ロジック改善）

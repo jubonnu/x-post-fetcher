@@ -7,6 +7,7 @@ import {
   approveLotteryByAdmin,
   getLotteryWithDetails,
   listLotteriesForAdmin,
+  mergeLotteryIntoTarget,
   rejectLotteryByAdmin,
   updateLotteryByAdmin,
   type AdminLotteryUpdateInput,
@@ -27,9 +28,13 @@ const listQuerySchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined)),
+  // 「重複として統合」の統合先を探すための商品名・店舗名の部分一致検索（Phase 8）。
+  search: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
+
+const mergeIntoBodySchema = z.object({ targetId: z.number().int().positive() });
 
 // 空文字は「クリア」の意図で送られてくる想定のためnullへ正規化する（フォームのテキスト欄クリア操作を想定）。
 const nullableText = z
@@ -84,6 +89,7 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
     const parsed = listQuerySchema.safeParse({
       verificationStatus: c.req.query("verificationStatus") ?? undefined,
       excludeVerificationStatuses: c.req.query("excludeVerificationStatuses") ?? undefined,
+      search: c.req.query("search") ?? undefined,
       limit: c.req.query("limit") ?? undefined,
       offset: c.req.query("offset") ?? undefined,
     });
@@ -216,5 +222,27 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
 
     await updateLotteryByAdmin(db, id, { imageUrl: null });
     return c.json({ ok: true });
+  });
+
+  app.post("/admin/lotteries/:id/merge-into", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const body = await parseJsonBody(c);
+    if (body === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストボディが不正です"));
+    const parsed = mergeIntoBodySchema.safeParse(body);
+    if (!parsed.success) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "targetIdが不正です"));
+
+    const db = c.get("db");
+    const result = await mergeLotteryIntoTarget(db, id, parsed.data.targetId);
+
+    if (result === "duplicate_not_found") return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+    if (result === "target_not_found") return apiErrorJson(c, new ApiError("NOT_FOUND", "統合先の抽選が見つかりません"));
+    if (result === "same_lottery") return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "自分自身には統合できません"));
+    if (result === "target_already_merged") {
+      return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "統合先が既に別の抽選へ統合されています"));
+    }
+
+    return c.json(result);
   });
 }

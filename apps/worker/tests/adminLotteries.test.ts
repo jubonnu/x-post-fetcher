@@ -338,3 +338,98 @@ describe("DELETE /admin/lotteries/:id/image", () => {
     expect(res.status).toBe(500);
   });
 });
+
+describe("GET /admin/lotteries?search=", () => {
+  it("商品名・店舗名の部分一致で絞り込める", async () => {
+    await insertLottery({ productNameRaw: "重複統合検索用のメガドリームex", storeNameRaw: "ドラゴンスター" });
+    await insertLottery({ productNameRaw: "全然関係ない商品", storeNameRaw: "別の店舗" });
+
+    const res = await app.request("/admin/lotteries?search=メガドリーム", { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { productNameRaw: string }[]; total: number };
+    expect(body.items.length).toBeGreaterThanOrEqual(1);
+    expect(body.items.every((i) => i.productNameRaw.includes("メガドリーム"))).toBe(true);
+  });
+});
+
+describe("POST /admin/lotteries/:id/merge-into", () => {
+  it("重複側の情報でtarget側の空欄を補完し、重複側はlifecycleStatus=mergedになる", async () => {
+    const targetId = await insertLottery({
+      productNameRaw: "メガドリームex",
+      storeNameRaw: "ドラゴンスター",
+      resultAnnouncementDate: null,
+    });
+    const duplicateId = await insertLottery({
+      productNameRaw: "メガドリームex",
+      storeNameRaw: "ドラゴンスター",
+      resultAnnouncementDate: "2026-08-15",
+      verificationStatus: "needs_review",
+    });
+
+    const res = await app.request(`/admin/lotteries/${duplicateId}/merge-into`, {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ targetId }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: true; targetId: number; changedFields: string[] };
+    expect(body.targetId).toBe(targetId);
+    expect(body.changedFields).toContain("resultAnnouncementDate");
+
+    const targetRes = await app.request(`/admin/lotteries/${targetId}`, { headers: authHeaders() });
+    const targetDetail = (await targetRes.json()) as { lottery: { resultAnnouncementDate: string | null } };
+    expect(targetDetail.lottery.resultAnnouncementDate).toBe("2026-08-15");
+
+    const duplicateRes = await app.request(`/admin/lotteries/${duplicateId}`, { headers: authHeaders() });
+    const duplicateDetail = (await duplicateRes.json()) as {
+      lottery: { lifecycleStatus: string; mergedIntoLotteryId: number | null };
+    };
+    expect(duplicateDetail.lottery.lifecycleStatus).toBe("merged");
+    expect(duplicateDetail.lottery.mergedIntoLotteryId).toBe(targetId);
+  });
+
+  it("統合後、重複側は公開一覧（管理一覧含む）から消える", async () => {
+    const targetId = await insertLottery();
+    const duplicateId = await insertLottery();
+
+    await app.request(`/admin/lotteries/${duplicateId}/merge-into`, {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ targetId }),
+    });
+
+    const res = await app.request(`/admin/lotteries?search=テスト商品`, { headers: authHeaders() });
+    const body = (await res.json()) as { items: { id: number }[] };
+    expect(body.items.some((i) => i.id === duplicateId)).toBe(false);
+  });
+
+  it("存在しないidは404", async () => {
+    const targetId = await insertLottery();
+    const res = await app.request(`/admin/lotteries/999999/merge-into`, {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ targetId }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("存在しないtargetIdは404", async () => {
+    const duplicateId = await insertLottery();
+    const res = await app.request(`/admin/lotteries/${duplicateId}/merge-into`, {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ targetId: 999999 }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("自分自身への統合は422 VALIDATION_ERROR", async () => {
+    const id = await insertLottery();
+    const res = await app.request(`/admin/lotteries/${id}/merge-into`, {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ targetId: id }),
+    });
+    expect(res.status).toBe(422);
+  });
+});

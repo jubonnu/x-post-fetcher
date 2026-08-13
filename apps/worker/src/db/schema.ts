@@ -118,8 +118,11 @@ export const lotteries = sqliteTable("lotteries", {
   rejectedReason: text("rejected_reason"),
   rejectedAt: text("rejected_at"),
   // Phase 6 (hardening): ライフサイクル管理（物理削除なし）
-  lifecycleStatus: text("lifecycle_status").notNull().default("active"), // active / orphaned / archived
+  lifecycleStatus: text("lifecycle_status").notNull().default("active"), // active / orphaned / archived / merged
   orphanedAt: text("orphaned_at"),
+  // 管理画面から「重複として統合」された場合の統合先lottery.id（Phase 8）。
+  // lifecycleStatus="merged"とセットで更新すること。
+  mergedIntoLotteryId: integer("merged_into_lottery_id"),
   createdAt: text("created_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),
