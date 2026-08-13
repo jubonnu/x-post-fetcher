@@ -30,6 +30,9 @@ const listQuerySchema = z.object({
     .transform((v) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : undefined)),
   // 「重複として統合」の統合先を探すための商品名・店舗名の部分一致検索（Phase 8）。
   search: z.string().max(200).optional(),
+  // 元投稿がXに投稿された日時（sourcePosts.publishedAt）での絞り込み。ISO8601（Phase 9）。
+  sourcePostPublishedAtFrom: z.string().datetime().optional(),
+  sourcePostPublishedAtTo: z.string().datetime().optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -90,6 +93,8 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
       verificationStatus: c.req.query("verificationStatus") ?? undefined,
       excludeVerificationStatuses: c.req.query("excludeVerificationStatuses") ?? undefined,
       search: c.req.query("search") ?? undefined,
+      sourcePostPublishedAtFrom: c.req.query("sourcePostPublishedAtFrom") ?? undefined,
+      sourcePostPublishedAtTo: c.req.query("sourcePostPublishedAtTo") ?? undefined,
       limit: c.req.query("limit") ?? undefined,
       offset: c.req.query("offset") ?? undefined,
     });

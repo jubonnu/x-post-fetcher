@@ -119,6 +119,26 @@ describe("GET /admin/lotteries", () => {
     expect(titles).not.toContain("却下済みも除外対象");
   });
 
+  it("sourcePostPublishedAtFrom/Toで元投稿のX投稿日時を絞り込める", async () => {
+    const inRangeId = await insertSourcePost({ publishedAt: "2026-08-05T00:00:00.000Z" });
+    const beforeId = await insertSourcePost({ publishedAt: "2026-07-31T23:59:59.000Z" });
+    const afterId = await insertSourcePost({ publishedAt: "2026-08-11T00:00:01.000Z" });
+    const inRange = await insertLottery({ productNameRaw: "投稿日絞り込み範囲内", sourcePostId: inRangeId });
+    const before = await insertLottery({ productNameRaw: "投稿日絞り込み範囲前", sourcePostId: beforeId });
+    const after = await insertLottery({ productNameRaw: "投稿日絞り込み範囲後", sourcePostId: afterId });
+
+    const res = await app.request(
+      "/admin/lotteries?sourcePostPublishedAtFrom=2026-08-01T00:00:00.000Z&sourcePostPublishedAtTo=2026-08-10T23:59:59.999Z",
+      { headers: authHeaders() }
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { id: number }[] };
+    const ids = body.items.map((i) => i.id);
+    expect(ids).toContain(inRange);
+    expect(ids).not.toContain(before);
+    expect(ids).not.toContain(after);
+  });
+
   it("limit/offsetで正しくページングできる（100件を超えても後続ページが取得できる）", async () => {
     for (let i = 0; i < 105; i++) {
       await insertLottery({ productNameRaw: `ページング商品${i}`, verificationStatus: "extracted" });

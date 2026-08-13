@@ -65,7 +65,7 @@ describe("LotteryListPage", () => {
 
     await waitFor(() => expect(apiRequestSpy).toHaveBeenCalled());
     expect(apiRequestSpy).toHaveBeenCalledWith(
-      "/admin/lotteries?excludeVerificationStatuses=approved,rejected&limit=20&offset=0"
+      "/admin/lotteries?excludeVerificationStatuses=approved%2Crejected&limit=20&offset=0"
     );
     expect(await screen.findByText("商品1")).toBeInTheDocument();
   });
@@ -99,7 +99,7 @@ describe("LotteryListPage", () => {
 
     await waitFor(() =>
       expect(apiRequestSpy).toHaveBeenLastCalledWith(
-        "/admin/lotteries?excludeVerificationStatuses=approved,rejected&limit=20&offset=20"
+        "/admin/lotteries?excludeVerificationStatuses=approved%2Crejected&limit=20&offset=20"
       )
     );
     expect(await screen.findByText("2 / 6")).toBeInTheDocument();
@@ -275,6 +275,70 @@ describe("LotteryListPage", () => {
       await screen.findByText("商品26");
 
       expect(screen.queryByText("終了済み")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("X投稿日の範囲フィルタ", () => {
+    it("開始日を指定すると、sourcePostPublishedAtFromを付けて再取得しページも0に戻る", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage();
+      await waitFor(() => expect(apiRequestSpy).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(screen.getByLabelText("X投稿日（開始）"), { target: { value: "2026-08-01" } });
+
+      await waitFor(() => {
+        const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+        expect(lastCall).toContain("sourcePostPublishedAtFrom=");
+        expect(lastCall).toContain("offset=0");
+      });
+    });
+
+    it("終了日を指定すると、sourcePostPublishedAtToを付けて再取得する", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage();
+      await waitFor(() => expect(apiRequestSpy).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(screen.getByLabelText("X投稿日（終了）"), { target: { value: "2026-08-10" } });
+
+      await waitFor(() => {
+        const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+        expect(lastCall).toContain("sourcePostPublishedAtTo=");
+      });
+    });
+
+    it("開始日・終了日のどちらも未指定なら「クリア」ボタンを表示しない", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage();
+
+      expect(screen.queryByRole("button", { name: "クリア" })).not.toBeInTheDocument();
+    });
+
+    it("「クリア」ボタンで日付フィルタを解除し、パラメータ無しで再取得する", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage();
+      await waitFor(() => expect(apiRequestSpy).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(screen.getByLabelText("X投稿日（開始）"), { target: { value: "2026-08-01" } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "クリア" })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole("button", { name: "クリア" }));
+
+      await waitFor(() => {
+        const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+        expect(lastCall).not.toContain("sourcePostPublishedAtFrom");
+        expect(lastCall).not.toContain("sourcePostPublishedAtTo");
+      });
+      expect(screen.queryByRole("button", { name: "クリア" })).not.toBeInTheDocument();
     });
   });
 

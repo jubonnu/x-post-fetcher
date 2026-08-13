@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getTableColumns, inArray, isNull, like, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, gte, inArray, isNull, like, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db, DbOrTx } from "../db/client.ts";
@@ -516,6 +516,9 @@ export interface ListLotteriesForAdminOptions {
    * 統合先を探すためのもの、Phase 8）。
    */
   search?: string;
+  /** 元投稿がXに投稿された日時（sourcePosts.publishedAt）での絞り込み。ISO8601、境界含む。 */
+  sourcePostPublishedAtFrom?: string;
+  sourcePostPublishedAtTo?: string;
   limit?: number;
   offset?: number;
 }
@@ -543,7 +546,15 @@ export interface ListLotteriesForAdminResult {
  * 統合で複数の投稿が寄与している場合も、あくまで最初の投稿の日時を返す。
  */
 export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAdminOptions = {}): Promise<ListLotteriesForAdminResult> {
-  const { verificationStatus, excludeVerificationStatuses, search, limit = 20, offset = 0 } = opts;
+  const {
+    verificationStatus,
+    excludeVerificationStatuses,
+    search,
+    sourcePostPublishedAtFrom,
+    sourcePostPublishedAtTo,
+    limit = 20,
+    offset = 0,
+  } = opts;
 
   const conditions = [eq(lotteries.lifecycleStatus, "active")];
   if (excludeVerificationStatuses && excludeVerificationStatuses.length > 0) {
@@ -564,6 +575,8 @@ export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAd
       )!
     );
   }
+  if (sourcePostPublishedAtFrom) conditions.push(gte(sourcePosts.publishedAt, sourcePostPublishedAtFrom));
+  if (sourcePostPublishedAtTo) conditions.push(lte(sourcePosts.publishedAt, sourcePostPublishedAtTo));
   const where = and(...conditions);
 
   const [rows, [{ total }]] = await Promise.all([
@@ -575,7 +588,11 @@ export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAd
       .orderBy(desc(lotteries.createdAt))
       .limit(Math.min(limit, 100))
       .offset(offset),
-    db.select({ total: count() }).from(lotteries).where(where),
+    db
+      .select({ total: count() })
+      .from(lotteries)
+      .leftJoin(sourcePosts, eq(sourcePosts.id, lotteries.sourcePostId))
+      .where(where),
   ]);
 
   return { lotteries: rows, total };

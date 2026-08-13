@@ -81,10 +81,24 @@ function filterQueryFor(tab: Tab): string {
   return "";
 }
 
+/** `<input type="date">`の値（ローカル日付）を、その日の開始/終了時刻のISO8601へ変換する。 */
+function dateInputToRangeStartIso(dateStr: string): string | null {
+  if (!dateStr) return null;
+  const d = new Date(`${dateStr}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+function dateInputToRangeEndIso(dateStr: string): string | null {
+  if (!dateStr) return null;
+  const d = new Date(`${dateStr}T23:59:59.999`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 export function LotteryListPage() {
   const { admin, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("needsReview");
   const [page, setPage] = useState(0);
+  const [publishedFrom, setPublishedFrom] = useState("");
+  const [publishedTo, setPublishedTo] = useState("");
   const [items, setItems] = useState<LotteryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -95,10 +109,23 @@ export function LotteryListPage() {
     setLoading(true);
     setError(null);
     try {
-      const filterQuery = filterQueryFor(tab);
       const offset = page * PAGE_SIZE;
-      const query = `?${filterQuery ? `${filterQuery}&` : ""}limit=${PAGE_SIZE}&offset=${offset}`;
-      const res = await apiRequest<LotteryListResponse>(`/admin/lotteries${query}`);
+      const params = new URLSearchParams();
+      const filterQuery = filterQueryFor(tab);
+      if (filterQuery) {
+        for (const pair of filterQuery.split("&")) {
+          const [key, value] = pair.split("=");
+          params.set(key, value);
+        }
+      }
+      const fromIso = dateInputToRangeStartIso(publishedFrom);
+      const toIso = dateInputToRangeEndIso(publishedTo);
+      if (fromIso) params.set("sourcePostPublishedAtFrom", fromIso);
+      if (toIso) params.set("sourcePostPublishedAtTo", toIso);
+      params.set("limit", String(PAGE_SIZE));
+      params.set("offset", String(offset));
+
+      const res = await apiRequest<LotteryListResponse>(`/admin/lotteries?${params.toString()}`);
       setItems(res.items);
       setTotal(res.total);
     } catch (e) {
@@ -106,7 +133,7 @@ export function LotteryListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page]);
+  }, [tab, page, publishedFrom, publishedTo]);
 
   useEffect(() => {
     void load();
@@ -114,6 +141,22 @@ export function LotteryListPage() {
 
   function selectTab(next: Tab) {
     setTab(next);
+    setPage(0);
+  }
+
+  function handlePublishedFromChange(value: string) {
+    setPublishedFrom(value);
+    setPage(0);
+  }
+
+  function handlePublishedToChange(value: string) {
+    setPublishedTo(value);
+    setPage(0);
+  }
+
+  function clearPublishedFilter() {
+    setPublishedFrom("");
+    setPublishedTo("");
     setPage(0);
   }
 
@@ -151,12 +194,39 @@ export function LotteryListPage() {
     <div className="page">
       <div className="header-row">
         <h1>抽選一覧</h1>
-        <div className="nav-links">
-          <span className="muted">{admin?.email}</span>
-          <Link to="/change-password">パスワード変更</Link>
-          <button type="button" className="secondary" onClick={logout}>
-            ログアウト
-          </button>
+        <div className="header-right">
+          <div className="nav-links">
+            <span className="muted">{admin?.email}</span>
+            <Link to="/change-password">パスワード変更</Link>
+            <button type="button" className="secondary" onClick={logout}>
+              ログアウト
+            </button>
+          </div>
+          <div className="date-filter-row">
+            <label className="muted" htmlFor="published-from">
+              X投稿日
+            </label>
+            <input
+              id="published-from"
+              type="date"
+              aria-label="X投稿日（開始）"
+              value={publishedFrom}
+              onChange={(e) => handlePublishedFromChange(e.target.value)}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="published-to"
+              type="date"
+              aria-label="X投稿日（終了）"
+              value={publishedTo}
+              onChange={(e) => handlePublishedToChange(e.target.value)}
+            />
+            {publishedFrom || publishedTo ? (
+              <button type="button" className="secondary" onClick={clearPublishedFilter}>
+                クリア
+              </button>
+            ) : null}
+          </div>
         </div>
       </div>
 
