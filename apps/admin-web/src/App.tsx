@@ -5,6 +5,7 @@ import { LoginPage } from "./pages/LoginPage";
 import { SignupPage } from "./pages/SignupPage";
 import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { LotteryListPage } from "./pages/LotteryListPage";
+import { LotteryNewPage } from "./pages/LotteryNewPage";
 import { LotteryEditPage } from "./pages/LotteryEditPage";
 
 export function App() {
@@ -19,6 +20,14 @@ export function App() {
             element={
               <ProtectedRoute>
                 <LotteryListPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/lotteries/new"
+            element={
+              <ProtectedRoute>
+                <LotteryNewPage />
               </ProtectedRoute>
             }
           />

@@ -236,6 +236,11 @@ export function LotteryListPage() {
             {t.label}
           </button>
         ))}
+        <Link to="/lotteries/new" style={{ marginLeft: "auto" }}>
+          <button type="button" className="primary">
+            + 手動で追加
+          </button>
+        </Link>
       </div>
 
       {loading ? <p className="muted">読み込み中…</p> : null}

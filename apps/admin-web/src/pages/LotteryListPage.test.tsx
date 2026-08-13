@@ -70,6 +70,15 @@ describe("LotteryListPage", () => {
     expect(await screen.findByText("商品1")).toBeInTheDocument();
   });
 
+  it("「+ 手動で追加」リンクが/lotteries/newを指す", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+    renderPage();
+
+    const link = await screen.findByRole("link", { name: "+ 手動で追加" });
+    expect(link).toHaveAttribute("href", "/lotteries/new");
+  });
+
   it("「承認済み」タブに切り替えるとverificationStatus=approvedで再取得し、ページも0に戻る", async () => {
     const apiRequestSpy = vi
       .spyOn(client, "apiRequest")

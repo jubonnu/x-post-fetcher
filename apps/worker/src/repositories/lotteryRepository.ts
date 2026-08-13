@@ -668,6 +668,51 @@ export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminL
   await db.update(lotteries).set(patch).where(eq(lotteries.id, id));
 }
 
+export interface AdminLotteryCreateInput {
+  productNameRaw: string;
+  storeNameRaw: string;
+  applicationEndAt?: string | null;
+  resultAnnouncementAt?: string | null;
+  purchaseDeadlineAt?: string | null;
+  applicationMethod?: string | null;
+  applicationUrl?: string | null;
+}
+
+/**
+ * 管理画面からの手動追加（Phase 9）。スクレイピング由来ではないため`sourcePostId`は無し。
+ * `normalizedProductName`/`normalizedStoreName`は自動抽出と同じnormalize関数で計算し、
+ * 以降の自動再解析でもこの抽選が重複統合・空欄補完の対象になるようにする。
+ * 管理者が直接入力した内容のため、`verificationStatus`は自動抽出と同じ既定（extracted）にする
+ * （承認は既存の「承認する」ボタンで別途行う一貫した運用にするため、作成時に自動承認はしない）。
+ */
+export async function createLotteryByAdmin(db: DbOrTx, input: AdminLotteryCreateInput): Promise<number> {
+  const now = new Date().toISOString();
+  const [row] = await db
+    .insert(lotteries)
+    .values({
+      sourcePostId: null,
+      productNameRaw: input.productNameRaw,
+      normalizedProductName: normalizeProductName(input.productNameRaw),
+      storeNameRaw: input.storeNameRaw,
+      normalizedStoreName: normalizeStoreName(input.storeNameRaw),
+      normalizerVersion: NORMALIZER_VERSION,
+      applicationEndAt: input.applicationEndAt ?? null,
+      applicationEndPrecision: input.applicationEndAt ? "exact" : "unknown",
+      resultAnnouncementAt: input.resultAnnouncementAt ?? null,
+      resultAnnouncementPrecision: input.resultAnnouncementAt ? "exact" : "unknown",
+      purchaseDeadlineAt: input.purchaseDeadlineAt ?? null,
+      applicationMethod: input.applicationMethod ?? null,
+      applicationUrl: input.applicationUrl ?? null,
+      resolvedApplicationUrl: input.applicationUrl ?? null,
+      status: "open",
+      verificationStatus: "extracted",
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ id: lotteries.id });
+  return row.id;
+}
+
 export type MergeLotteryError = "duplicate_not_found" | "target_not_found" | "same_lottery" | "target_already_merged";
 
 export interface MergeLotteryResult {

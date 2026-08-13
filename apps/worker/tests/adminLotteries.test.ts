@@ -192,6 +192,78 @@ describe("POST /admin/lotteries/:id/approve, /reject", () => {
   });
 });
 
+describe("POST /admin/lotteries", () => {
+  it("商品名・店舗名を指定して手動で抽選を作成できる", async () => {
+    const res = await app.request("/admin/lotteries", {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({
+        productNameRaw: "手動追加した商品",
+        storeNameRaw: "手動追加した店舗",
+        applicationEndAt: "2026-09-01T15:00:00.000Z",
+        applicationMethod: "電話で応募",
+        applicationUrl: "https://example.com/manual",
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      lottery: {
+        id: number;
+        productNameRaw: string;
+        storeNameRaw: string;
+        normalizedProductName: string;
+        normalizedStoreName: string;
+        applicationEndAt: string;
+        applicationMethod: string;
+        applicationUrl: string;
+        verificationStatus: string;
+      };
+    };
+    expect(body.lottery.productNameRaw).toBe("手動追加した商品");
+    expect(body.lottery.storeNameRaw).toBe("手動追加した店舗");
+    expect(body.lottery.normalizedProductName).toBe("手動追加した商品");
+    expect(body.lottery.normalizedStoreName).toBe("手動追加した店舗");
+    expect(body.lottery.applicationEndAt).toBe("2026-09-01T15:00:00.000Z");
+    expect(body.lottery.applicationMethod).toBe("電話で応募");
+    expect(body.lottery.applicationUrl).toBe("https://example.com/manual");
+    expect(body.lottery.verificationStatus).toBe("extracted");
+
+    // 一覧にも表示されることを確認
+    const listRes = await app.request("/admin/lotteries?search=手動追加した商品", { headers: authHeaders() });
+    const listBody = (await listRes.json()) as { items: { id: number }[] };
+    expect(listBody.items.some((i) => i.id === body.lottery.id)).toBe(true);
+  });
+
+  it("商品名・店舗名以外は省略できる", async () => {
+    const res = await app.request("/admin/lotteries", {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ productNameRaw: "最小構成商品", storeNameRaw: "最小構成店舗" }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { lottery: { applicationEndAt: string | null } };
+    expect(body.lottery.applicationEndAt).toBeNull();
+  });
+
+  it("商品名が空なら422 VALIDATION_ERROR", async () => {
+    const res = await app.request("/admin/lotteries", {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ productNameRaw: "", storeNameRaw: "店舗のみ" }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("認証無しは401", async () => {
+    const res = await app.request("/admin/lotteries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productNameRaw: "a", storeNameRaw: "b" }),
+    });
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("PATCH /admin/lotteries/:id", () => {
   it("タイトル・店舗・締切・応募方法・応募URLを更新できる", async () => {
     const id = await insertLottery({ applicationEndDate: "2026-08-06" });

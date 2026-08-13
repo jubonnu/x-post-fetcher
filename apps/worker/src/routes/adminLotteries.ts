@@ -5,11 +5,13 @@ import { ApiError, apiErrorJson } from "../auth/errors.ts";
 import { findAdminUserById } from "../repositories/adminUserRepository.ts";
 import {
   approveLotteryByAdmin,
+  createLotteryByAdmin,
   getLotteryWithDetails,
   listLotteriesForAdmin,
   mergeLotteryIntoTarget,
   rejectLotteryByAdmin,
   updateLotteryByAdmin,
+  type AdminLotteryCreateInput,
   type AdminLotteryUpdateInput,
 } from "../repositories/lotteryRepository.ts";
 import type { AppEnv } from "../env.ts";
@@ -45,6 +47,16 @@ const nullableText = z
   .max(2000)
   .nullable()
   .transform((v) => (v === "" ? null : v));
+
+const createLotterySchema = z.object({
+  productNameRaw: z.string().trim().min(1).max(2000),
+  storeNameRaw: z.string().trim().min(1).max(2000),
+  applicationEndAt: z.string().datetime().nullable().optional(),
+  resultAnnouncementAt: z.string().datetime().nullable().optional(),
+  purchaseDeadlineAt: z.string().datetime().nullable().optional(),
+  applicationMethod: nullableText.optional(),
+  applicationUrl: nullableText.optional(),
+});
 
 const updateLotterySchema = z.object({
   productNameRaw: nullableText.optional(),
@@ -103,6 +115,19 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
     const db = c.get("db");
     const result = await listLotteriesForAdmin(db, parsed.data);
     return c.json({ items: result.lotteries, total: result.total });
+  });
+
+  app.post("/admin/lotteries", requireAdminAuth, async (c) => {
+    const body = await parseJsonBody(c);
+    if (body === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストボディが不正です"));
+
+    const parsed = createLotterySchema.safeParse(body);
+    if (!parsed.success) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストの形式が不正です"));
+
+    const db = c.get("db");
+    const id = await createLotteryByAdmin(db, parsed.data as AdminLotteryCreateInput);
+    const created = await getLotteryWithDetails(db, id);
+    return c.json(created, 201);
   });
 
   app.get("/admin/lotteries/:id", requireAdminAuth, async (c) => {
