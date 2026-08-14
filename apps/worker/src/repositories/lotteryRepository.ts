@@ -105,6 +105,7 @@ export function toLotteryRow(sourcePostId: number, l: ExtractedLottery) {
     applicationEndAt: l.applicationEnd.at,
     applicationEndDate: l.applicationEnd.date,
     applicationEndPrecision: l.applicationEnd.precision,
+    resultAnnouncementStartAt: l.resultAnnouncementStart.at,
     resultAnnouncementAt: l.resultAnnouncement.at,
     resultAnnouncementDate: l.resultAnnouncement.date,
     resultAnnouncementPrecision: l.resultAnnouncement.precision,
@@ -647,8 +648,11 @@ export async function rejectLotteryByAdmin(db: DbOrTx, id: number, reason: strin
 export interface AdminLotteryUpdateInput {
   productNameRaw?: string | null;
   storeNameRaw?: string | null;
+  applicationStartAt?: string | null;
   applicationEndAt?: string | null;
+  resultAnnouncementStartAt?: string | null;
   resultAnnouncementAt?: string | null;
+  purchaseStartAt?: string | null;
   purchaseDeadlineAt?: string | null;
   applicationMethod?: string | null;
   applicationUrl?: string | null;
@@ -669,6 +673,9 @@ export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminL
   if (input.productNameRaw !== undefined) patch.productNameRaw = input.productNameRaw;
   if (input.storeNameRaw !== undefined) patch.storeNameRaw = input.storeNameRaw;
   if (input.applicationMethod !== undefined) patch.applicationMethod = input.applicationMethod;
+  if (input.applicationStartAt !== undefined) patch.applicationStartAt = input.applicationStartAt;
+  if (input.resultAnnouncementStartAt !== undefined) patch.resultAnnouncementStartAt = input.resultAnnouncementStartAt;
+  if (input.purchaseStartAt !== undefined) patch.purchaseStartAt = input.purchaseStartAt;
   if (input.purchaseDeadlineAt !== undefined) patch.purchaseDeadlineAt = input.purchaseDeadlineAt;
   if (input.imageUrl !== undefined) patch.imageUrl = input.imageUrl;
 

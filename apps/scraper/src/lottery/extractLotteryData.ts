@@ -1,4 +1,4 @@
-import { resolveDate, type ClassifiedUrl, type ExtractedLottery, type ResolvedDate } from "@x-post/shared";
+import { resolveDate, resolveDateRange, type ClassifiedUrl, type ExtractedLottery, type ResolvedDate, type ResolvedDateRange } from "@x-post/shared";
 import { detectCardType } from "./classifyPost.ts";
 import { NOT_PUBLISHED_SIGNALS } from "./keywords.ts";
 
@@ -103,12 +103,39 @@ function looksLikeNonDateLine(line: string): boolean {
 }
 
 /**
- * 日付フィールドを抽出。
- * - キーワード行があり日付が取れれば resolveDate
+ * 日付フィールド（範囲対応）を抽出。
+ * - キーワード行があり日付が取れれば resolveDateRange（「A〜B」なら開始・終了の両方、
+ *   単一日付なら終了側のみでresolveDateと同じ結果）
  * - キーワード行自体に日付が無い場合、直後の1〜2行を探索し、最初に有効な日付として
  *   解釈できた行を採用する（【応募期間】等のラベル行と実際の日付が別行に分かれている
  *   投稿形式に対応。URL行は誤認防止のため探索対象から除外する。2026-08、実データで確認）。
  * - キーワード行はあるが「未公開/後日/未定」等なら not_published
+ */
+function fieldDateRange(body: string, keywords: string[], post: string | null): ResolvedDateRange {
+  const lines = body.split(/\n+/).map((l) => l.trim());
+  const idx = lineIndexContaining(lines, keywords);
+  if (idx === -1) return { start: null, end: emptyResolved() };
+  const line = lines[idx];
+  const range = resolveDateRange(line, post);
+  if (range.end.precision !== "unknown") return range;
+
+  for (let offset = 1; offset <= 2; offset++) {
+    const nextLine = lines[idx + offset];
+    if (nextLine === undefined || looksLikeNonDateLine(nextLine)) continue;
+    const nextRange = resolveDateRange(nextLine, post);
+    if (nextRange.end.precision !== "unknown") return nextRange;
+  }
+
+  if (hasAny(line, NOT_PUBLISHED_SIGNALS) || hasAny(body, NOT_PUBLISHED_SIGNALS)) {
+    return { start: null, end: { ...emptyResolved(), status: "not_published", rawText: line } };
+  }
+  return { start: null, end: { ...emptyResolved(), rawText: line } };
+}
+
+/**
+ * 日付フィールドを抽出（単一値。範囲表記があっても最初に見つかった日付をそのまま返す）。
+ * 【応募開始】等、「開始日そのもの」を明示するラベル向け。範囲の終了側を拾ってしまわないよう、
+ * `fieldDateRange`（`.end`が範囲の終了側になる）とは意図的に別実装にしている。
  */
 function fieldDate(body: string, keywords: string[], post: string | null): ResolvedDate {
   const lines = body.split(/\n+/).map((l) => l.trim());
@@ -174,11 +201,25 @@ export function extractSingleLottery(
 ): ExtractedLottery {
   const body = bodyText ?? "";
 
-  const applicationStart = fieldDate(body, ["応募開始", "受付開始", "抽選開始日"], postPublishedAt);
-  const applicationEnd = fieldDate(body, ["応募期間", "締切", "〆", "まで"], postPublishedAt);
-  const resultAnnouncement = fieldDate(body, ["当選発表", "当選者発表", "抽選結果"], postPublishedAt);
-  const purchaseStart = fieldDate(body, ["購入期間", "購入開始", "受取開始"], postPublishedAt);
-  const purchaseDeadline = fieldDate(body, ["購入期限", "受取期限", "支払期限"], postPublishedAt);
+  // 「A〜B」形式の範囲表記なら開始・終了の両方を拾う（応募期間・当選発表・購入期限、Phase 10）。
+  // 開始日は、別ラベル（【応募開始】等）で明示されていればそちらを優先し、無ければ範囲表記から補う。
+  const applicationStartExplicit = fieldDate(body, ["応募開始", "受付開始", "抽選開始日"], postPublishedAt);
+  const applicationRange = fieldDateRange(body, ["応募期間", "締切", "〆", "まで"], postPublishedAt);
+  const applicationEnd = applicationRange.end;
+  const applicationStart =
+    applicationStartExplicit.precision !== "unknown" ? applicationStartExplicit : applicationRange.start ?? applicationStartExplicit;
+
+  const resultAnnouncementRange = fieldDateRange(body, ["当選発表", "当選者発表", "抽選結果"], postPublishedAt);
+  const resultAnnouncement = resultAnnouncementRange.end;
+  const resultAnnouncementStart = resultAnnouncementRange.start ?? emptyResolved();
+
+  const purchaseStartExplicit = fieldDate(body, ["購入期間", "購入開始", "受取開始"], postPublishedAt);
+  // 「購入期限」等に加え「購入期間」も範囲探索の対象にする（「【購入期間】A〜B」だけの投稿で
+  // 締切側が拾えないままになっていたため。2026-08、実データで確認）。
+  const purchaseDeadlineRange = fieldDateRange(body, ["購入期限", "受取期限", "支払期限", "購入期間"], postPublishedAt);
+  const purchaseDeadline = purchaseDeadlineRange.end;
+  const purchaseStart =
+    purchaseStartExplicit.precision !== "unknown" ? purchaseStartExplicit : purchaseDeadlineRange.start ?? purchaseStartExplicit;
 
   // 「抽選開始されました」だけで開始日時が不明なら、投稿日時を confirmedOpenAt に保存
   const startedNow = /抽選開始されました|抽選開始しました|抽選が開始|受付開始しました/.test(body);
@@ -202,6 +243,7 @@ export function extractSingleLottery(
     region: null,
     applicationStart,
     applicationEnd,
+    resultAnnouncementStart,
     resultAnnouncement,
     purchaseStart,
     purchaseDeadline,
@@ -240,7 +282,9 @@ export function splitLotteries(
   const headerProduct = extractHeaderProduct(body);
 
   const cardType = detectCardType(body);
-  const resultAnnouncement = fieldDate(body, ["当選発表", "当選者発表", "抽選結果"], postPublishedAt);
+  const resultAnnouncementRange = fieldDateRange(body, ["当選発表", "当選者発表", "抽選結果"], postPublishedAt);
+  const resultAnnouncement = resultAnnouncementRange.end;
+  const resultAnnouncementStart = resultAnnouncementRange.start ?? emptyResolved();
   const applicationUrl = firstUrlOfType(urls, "application");
   const officialInformationUrl = firstUrlOfType(urls, "official_information");
   const appDownloadUrl = firstUrlOfType(urls, "app_download");
@@ -253,6 +297,7 @@ export function splitLotteries(
     region: null,
     applicationStart: emptyResolved(),
     applicationEnd,
+    resultAnnouncementStart,
     resultAnnouncement,
     purchaseStart: emptyResolved(),
     purchaseDeadline: emptyResolved(),

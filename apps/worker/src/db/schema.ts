@@ -91,6 +91,9 @@ export const lotteries = sqliteTable("lotteries", {
   applicationEndAt: text("application_end_at"),
   applicationEndDate: text("application_end_date"),
   applicationEndPrecision: text("application_end_precision"),
+  // 「A〜B」形式で当選発表の期間が書かれている場合の開始側（Phase 10）。
+  // applicationStartAt/purchaseStartAtと同様、単一の値のみ保持し個別のdate/precisionは持たない。
+  resultAnnouncementStartAt: text("result_announcement_start_at"),
   resultAnnouncementAt: text("result_announcement_at"),
   resultAnnouncementDate: text("result_announcement_date"),
   resultAnnouncementPrecision: text("result_announcement_precision"),

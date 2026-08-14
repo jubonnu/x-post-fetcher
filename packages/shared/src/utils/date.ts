@@ -54,8 +54,10 @@ export function resolveDate(rawText: string | null | undefined, postPublishedAt:
   const wdMatch = text.match(/[（(]\s*([日月火水木金土])\s*[)）]/);
   const weekday = wdMatch ? WEEKDAY[wdMatch[1]] : null;
 
-  // 時刻
-  const timeMatch = text.match(/(\d{1,2}):(\d{2})/);
+  // 時刻（"14:00"形式優先、無ければ"14時"/"23時59分"のような漢字形式もサポート）
+  const timeColonMatch = text.match(/(\d{1,2}):(\d{2})/);
+  const timeKanjiMatch = text.match(/(\d{1,2})\s*時(?!間)(?:\s*(\d{1,2})\s*分)?/);
+  const timeMatch = timeColonMatch ?? (timeKanjiMatch ? [timeKanjiMatch[0], timeKanjiMatch[1], timeKanjiMatch[2] ?? "0"] : null);
   const hasClosing = /閉店/.test(text);
 
   // 年の決定
@@ -115,4 +117,41 @@ export function resolveDate(rawText: string | null | undefined, postPublishedAt:
 
   // 日付のみ
   return { at: null, date: dateStr, precision: "date_only", status, rawText: text, yearInferred };
+}
+
+const RANGE_SEPARATOR = /[〜～~]/;
+
+export interface ResolvedDateRange {
+  /** 範囲表記（「A〜B」）が検出できた場合のみ非null。単一日付のみの場合はnull。 */
+  start: ResolvedDate | null;
+  end: ResolvedDate;
+}
+
+/**
+ * 「7月15日(水)14時〜7月17日(金)23時59分」のような日付範囲を解決する。
+ * 範囲区切り（〜/～/~）が見つからない、または区切り後の文字列から日付が取れない場合は、
+ * 単一日付として`resolveDate`と同じ結果を`end`に返す（`start`はnull）。
+ * 区切り前（開始側）から日付が取れない場合も、誤検知を避けるため単一日付扱いにする。
+ */
+export function resolveDateRange(rawText: string | null | undefined, postPublishedAt: string | null): ResolvedDateRange {
+  const text = rawText?.trim() ?? "";
+  if (!text) return { start: null, end: resolveDate(rawText, postPublishedAt) };
+
+  const sepMatch = text.match(RANGE_SEPARATOR);
+  if (!sepMatch || sepMatch.index === undefined) {
+    return { start: null, end: resolveDate(text, postPublishedAt) };
+  }
+
+  const left = text.slice(0, sepMatch.index);
+  const right = text.slice(sepMatch.index + sepMatch[0].length);
+  const endResolved = resolveDate(right, postPublishedAt);
+  // 区切り後（終了側）に日付が無ければ範囲ではない（例:「〜大変お得です」のような文章中の波ダッシュ）
+  if (endResolved.precision === "unknown") {
+    return { start: null, end: resolveDate(text, postPublishedAt) };
+  }
+  const startResolved = resolveDate(left, postPublishedAt);
+  if (startResolved.precision === "unknown") {
+    return { start: null, end: endResolved };
+  }
+  return { start: startResolved, end: endResolved };
 }

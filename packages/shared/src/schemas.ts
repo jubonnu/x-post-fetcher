@@ -103,6 +103,8 @@ export const ExtractedLotterySchema = z.object({
   region: z.string().nullable().default(null),
   applicationStart: ResolvedDateSchema.default({}),
   applicationEnd: ResolvedDateSchema.default({}),
+  /** 「A〜B」形式で当選発表の期間が書かれている場合の開始側（Phase 10）。単一日付のみの投稿ではunknownのまま。 */
+  resultAnnouncementStart: ResolvedDateSchema.default({}),
   resultAnnouncement: ResolvedDateSchema.default({}),
   purchaseStart: ResolvedDateSchema.default({}),
   purchaseDeadline: ResolvedDateSchema.default({}),

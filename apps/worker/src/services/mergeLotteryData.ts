@@ -46,6 +46,7 @@ const SCALAR_FIELDS = [
   "region",
   "applicationStartAt",
   "confirmedOpenAt",
+  "resultAnnouncementStartAt",
   "purchaseStartAt",
   "purchaseDeadlineAt",
   "applicationUrl",

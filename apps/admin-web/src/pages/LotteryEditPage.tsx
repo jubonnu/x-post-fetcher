@@ -8,8 +8,11 @@ import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../utils/datetime"
 interface FormState {
   productNameRaw: string;
   storeNameRaw: string;
+  applicationStartAt: string;
   applicationEndAt: string;
+  resultAnnouncementStartAt: string;
   resultAnnouncementAt: string;
+  purchaseStartAt: string;
   purchaseDeadlineAt: string;
   applicationMethod: string;
   applicationUrls: string[];
@@ -25,8 +28,11 @@ function toFormState(lottery: LotteryRow): FormState {
   return {
     productNameRaw: lottery.productNameRaw ?? "",
     storeNameRaw: lottery.storeNameRaw ?? "",
+    applicationStartAt: toDatetimeLocalValue(lottery.applicationStartAt ?? null),
     applicationEndAt: toDatetimeLocalValue(lottery.applicationEndAt),
+    resultAnnouncementStartAt: toDatetimeLocalValue(lottery.resultAnnouncementStartAt ?? null),
     resultAnnouncementAt: toDatetimeLocalValue(lottery.resultAnnouncementAt),
+    purchaseStartAt: toDatetimeLocalValue(lottery.purchaseStartAt ?? null),
     purchaseDeadlineAt: toDatetimeLocalValue(lottery.purchaseDeadlineAt),
     applicationMethod: lottery.applicationMethod ?? "",
     applicationUrls: urls,
@@ -98,8 +104,11 @@ export function LotteryEditPage() {
         body: {
           productNameRaw: form.productNameRaw,
           storeNameRaw: form.storeNameRaw,
+          applicationStartAt: fromDatetimeLocalValue(form.applicationStartAt),
           applicationEndAt: fromDatetimeLocalValue(form.applicationEndAt),
+          resultAnnouncementStartAt: fromDatetimeLocalValue(form.resultAnnouncementStartAt),
           resultAnnouncementAt: fromDatetimeLocalValue(form.resultAnnouncementAt),
+          purchaseStartAt: fromDatetimeLocalValue(form.purchaseStartAt),
           purchaseDeadlineAt: fromDatetimeLocalValue(form.purchaseDeadlineAt),
           applicationMethod: form.applicationMethod,
           applicationUrls: form.applicationUrls.map((u) => u.trim()).filter((u) => u.length > 0),
@@ -295,33 +304,72 @@ export function LotteryEditPage() {
         </div>
 
         <div className="field">
-          <label htmlFor="applicationEndAt">応募締切</label>
-          <input
-            id="applicationEndAt"
-            type="datetime-local"
-            value={form.applicationEndAt}
-            onChange={(e) => updateField("applicationEndAt", e.target.value)}
-          />
+          <label htmlFor="applicationEndAt">応募期間（開始 〜 締切）</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="applicationStartAt"
+              type="datetime-local"
+              aria-label="応募開始"
+              value={form.applicationStartAt}
+              onChange={(e) => updateField("applicationStartAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="applicationEndAt"
+              type="datetime-local"
+              aria-label="応募締切"
+              value={form.applicationEndAt}
+              onChange={(e) => updateField("applicationEndAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+          </div>
         </div>
 
         <div className="field">
-          <label htmlFor="resultAnnouncementAt">当選発表</label>
-          <input
-            id="resultAnnouncementAt"
-            type="datetime-local"
-            value={form.resultAnnouncementAt}
-            onChange={(e) => updateField("resultAnnouncementAt", e.target.value)}
-          />
+          <label htmlFor="resultAnnouncementAt">当選発表（開始 〜 終了）</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="resultAnnouncementStartAt"
+              type="datetime-local"
+              aria-label="当選発表開始"
+              value={form.resultAnnouncementStartAt}
+              onChange={(e) => updateField("resultAnnouncementStartAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="resultAnnouncementAt"
+              type="datetime-local"
+              aria-label="当選発表"
+              value={form.resultAnnouncementAt}
+              onChange={(e) => updateField("resultAnnouncementAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+          </div>
         </div>
 
         <div className="field">
-          <label htmlFor="purchaseDeadlineAt">購入期限</label>
-          <input
-            id="purchaseDeadlineAt"
-            type="datetime-local"
-            value={form.purchaseDeadlineAt}
-            onChange={(e) => updateField("purchaseDeadlineAt", e.target.value)}
-          />
+          <label htmlFor="purchaseDeadlineAt">購入期間（開始 〜 期限）</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="purchaseStartAt"
+              type="datetime-local"
+              aria-label="購入開始"
+              value={form.purchaseStartAt}
+              onChange={(e) => updateField("purchaseStartAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="purchaseDeadlineAt"
+              type="datetime-local"
+              aria-label="購入期限"
+              value={form.purchaseDeadlineAt}
+              onChange={(e) => updateField("purchaseDeadlineAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+          </div>
         </div>
 
         <div className="field">

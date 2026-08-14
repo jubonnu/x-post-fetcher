@@ -1,0 +1,1 @@
+ALTER TABLE `lotteries` ADD `result_announcement_start_at` text;

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LotteryEditPage } from "./LotteryEditPage";
 import * as client from "../api/client";
 import type { LotteryDetailResponse, LotteryListResponse, LotteryRow } from "../types";
+import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../utils/datetime";
 
 function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
   return {
@@ -197,6 +198,77 @@ describe("LotteryEditPage", () => {
           expect.objectContaining({ method: "PATCH", body: expect.objectContaining({ applicationUrls: [] }) })
         )
       );
+    });
+  });
+
+  describe("開始日〜終了日の表示・編集（Phase 10）", () => {
+    it("既存の開始日時がフォームに反映される", async () => {
+      const applicationStartAt = "2026-08-11T05:00:00.000Z";
+      const resultAnnouncementStartAt = "2026-08-14T00:00:00.000Z";
+      const purchaseStartAt = "2026-08-19T00:00:00.000Z";
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ applicationStartAt, resultAnnouncementStartAt, purchaseStartAt }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      // 実行環境のローカルタイムゾーンに依存しないよう、コンポーネントと同じ変換関数で期待値を計算する
+      expect((screen.getByLabelText("応募開始") as HTMLInputElement).value).toBe(toDatetimeLocalValue(applicationStartAt));
+      expect((screen.getByLabelText("当選発表開始") as HTMLInputElement).value).toBe(toDatetimeLocalValue(resultAnnouncementStartAt));
+      expect((screen.getByLabelText("購入開始") as HTMLInputElement).value).toBe(toDatetimeLocalValue(purchaseStartAt));
+    });
+
+    it("開始日を入力して保存すると、PATCHのbodyに開始日時系フィールドが含まれる", async () => {
+      const apiRequestSpy = vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
+        if (path === "/admin/lotteries/42" && options?.method === "PATCH") {
+          return { lottery: makeLottery(), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+        }
+        return { lottery: makeLottery(), sources: [], fieldHistory: [] } satisfies LotteryDetailResponse;
+      });
+
+      // datetime-local入力欄への入力値（ローカル時刻表記）。実行環境のタイムゾーンに関わらず、
+      // 期待値もfromDatetimeLocalValueで同じ変換を通すため一致する。
+      const applicationStartLocal = "2026-08-11T14:00";
+      const resultAnnouncementStartLocal = "2026-08-14T09:00";
+      const purchaseStartLocal = "2026-08-19T09:00";
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      fireEvent.change(screen.getByLabelText("応募開始"), { target: { value: applicationStartLocal } });
+      fireEvent.change(screen.getByLabelText("当選発表開始"), { target: { value: resultAnnouncementStartLocal } });
+      fireEvent.change(screen.getByLabelText("購入開始"), { target: { value: purchaseStartLocal } });
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+      await waitFor(() =>
+        expect(apiRequestSpy).toHaveBeenCalledWith(
+          "/admin/lotteries/42",
+          expect.objectContaining({
+            method: "PATCH",
+            body: expect.objectContaining({
+              applicationStartAt: fromDatetimeLocalValue(applicationStartLocal),
+              resultAnnouncementStartAt: fromDatetimeLocalValue(resultAnnouncementStartLocal),
+              purchaseStartAt: fromDatetimeLocalValue(purchaseStartLocal),
+            }),
+          })
+        )
+      );
+    });
+
+    it("開始日が未設定の場合は空欄で表示される", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery(),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      expect((screen.getByLabelText("応募開始") as HTMLInputElement).value).toBe("");
     });
   });
 

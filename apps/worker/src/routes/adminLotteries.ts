@@ -62,8 +62,11 @@ const createLotterySchema = z.object({
 const updateLotterySchema = z.object({
   productNameRaw: nullableText.optional(),
   storeNameRaw: nullableText.optional(),
+  applicationStartAt: z.string().datetime().nullable().optional(),
   applicationEndAt: z.string().datetime().nullable().optional(),
+  resultAnnouncementStartAt: z.string().datetime().nullable().optional(),
   resultAnnouncementAt: z.string().datetime().nullable().optional(),
+  purchaseStartAt: z.string().datetime().nullable().optional(),
   purchaseDeadlineAt: z.string().datetime().nullable().optional(),
   applicationMethod: nullableText.optional(),
   applicationUrl: nullableText.optional(),

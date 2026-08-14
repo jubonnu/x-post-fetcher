@@ -117,30 +117,30 @@ describe("extractSingleLottery", () => {
       // 実データで最も多いパターン: ラベル行と日付が別行に分かれている
       const body = "ポケセンオンラインで「ストームエメラルダ」の抽選開始されました\n【応募期間】\n7月26日 23時59分〆";
       const l = extractSingleLottery(body, POST_AT, []);
-      expect(l.applicationEnd.precision).toBe("date_only");
-      expect(l.applicationEnd.date).toBe("2026-07-26");
+      expect(l.applicationEnd.precision).toBe("datetime");
+      expect(l.applicationEnd.at).toBe("2026-07-26T23:59:00+09:00");
     });
 
     it("ラベル行の直後が日付ではない行（注意書き）で、その次の行に日付がある場合も2行先まで探索する", () => {
       const body = "【応募期間】\n※店舗により対応が異なる場合があります\n7月26日 23時59分〆";
       const l = extractSingleLottery(body, POST_AT, []);
-      expect(l.applicationEnd.precision).toBe("date_only");
-      expect(l.applicationEnd.date).toBe("2026-07-26");
+      expect(l.applicationEnd.precision).toBe("datetime");
+      expect(l.applicationEnd.at).toBe("2026-07-26T23:59:00+09:00");
     });
 
     it("価格・数量表記の行を挟んでも直後の日付行を見つけられる", () => {
       const body = "【応募期間】\n5,000円(税込) 1BOX\n7月26日 23時59分〆";
       const l = extractSingleLottery(body, POST_AT, []);
-      expect(l.applicationEnd.precision).toBe("date_only");
-      expect(l.applicationEnd.date).toBe("2026-07-26");
+      expect(l.applicationEnd.precision).toBe("datetime");
+      expect(l.applicationEnd.at).toBe("2026-07-26T23:59:00+09:00");
     });
 
     it("URL行はスキップし、それより後ろの日付行を採用する（URL内の数字を日付と誤認しない）", () => {
       // "https://example.com/8/13" は日付誤認防止のガードが無いと 8/13 と誤って解釈されてしまう
       const body = "【応募期間】\nhttps://example.com/8/13\n7月26日 23時59分〆";
       const l = extractSingleLottery(body, POST_AT, []);
-      expect(l.applicationEnd.precision).toBe("date_only");
-      expect(l.applicationEnd.date).toBe("2026-07-26");
+      expect(l.applicationEnd.precision).toBe("datetime");
+      expect(l.applicationEnd.at).toBe("2026-07-26T23:59:00+09:00");
     });
 
     it("URL行しか続かず有効な日付が2行以内に無い場合は unknown のまま（URLを日付として誤認しない）", () => {
@@ -165,6 +165,44 @@ describe("extractSingleLottery", () => {
       const body = "【応募期間】8/11(火)23:59〆\n7月26日 23時59分〆";
       const l = extractSingleLottery(body, POST_AT, []);
       expect(l.applicationEnd.date).toBe("2026-08-11");
+    });
+  });
+
+  describe("日付範囲「A〜B」の開始・終了抽出（Phase 10）", () => {
+    it("応募期間が範囲表記なら、開始日はapplicationStart・終了日はapplicationEndに入る", () => {
+      const body = "【応募期間】\n8月11日(火)14時〜8月13日(木)23時59分";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationStart.at).toBe("2026-08-11T14:00:00+09:00");
+      expect(l.applicationEnd.at).toBe("2026-08-13T23:59:00+09:00");
+    });
+
+    it("当選発表が範囲表記なら、resultAnnouncementStart・resultAnnouncementの両方に入る", () => {
+      const body = "【当選発表】\n8月14日(金)〜8月16日(日)順次ご連絡";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.resultAnnouncementStart.date).toBe("2026-08-14");
+      expect(l.resultAnnouncement.date).toBe("2026-08-16");
+    });
+
+    it("購入期間が範囲表記（「購入期限」ラベルが無い）でも締切側がpurchaseDeadlineに入る", () => {
+      const body = "【購入期間】\n8月19日(水)～8月26日(水)";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.purchaseStart.date).toBe("2026-08-19");
+      expect(l.purchaseDeadline.date).toBe("2026-08-26");
+    });
+
+    it("単一日付（範囲区切りが無い）の場合は従来通り開始日フィールドはunknownのまま", () => {
+      const body = "【応募期間】\n8月11日(火)23:59〆";
+      const l = extractSingleLottery(body, POST_AT, []);
+      expect(l.applicationEnd.date).toBe("2026-08-11");
+      expect(l.applicationStart.precision).toBe("unknown");
+    });
+
+    it("【応募開始】等の明示ラベルがあれば、範囲検出より優先される", () => {
+      const body = "【応募開始】\n8月10日(月)10時\n【応募期間】\n8月11日(火)14時〜8月13日(木)23時59分";
+      const l = extractSingleLottery(body, POST_AT, []);
+      // 明示ラベル側（8/10）が優先され、範囲側の開始（8/11）では上書きされない
+      expect(l.applicationStart.date).toBe("2026-08-10");
+      expect(l.applicationEnd.date).toBe("2026-08-13");
     });
   });
 

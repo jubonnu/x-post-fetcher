@@ -55,6 +55,7 @@ function makeLottery(overrides: Partial<ExtractedLottery> = {}): ExtractedLotter
     applicationStart: { at: null, date: null, precision: "unknown", status: "ok" },
     // precision: "date_only" → resolvedEndDate() がスコア計算対象にする
     applicationEnd: { at: null, date: "2025-12-31", precision: "date_only", status: "ok" },
+    resultAnnouncementStart: { at: null, date: null, precision: "unknown", status: "ok" },
     resultAnnouncement: { at: null, date: null, precision: "unknown", status: "ok" },
     purchaseStart: { at: null, date: null, precision: "unknown", status: "ok" },
     purchaseDeadline: { at: null, date: null, precision: "unknown", status: "ok" },

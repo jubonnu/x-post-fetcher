@@ -355,6 +355,39 @@ describe("PATCH /admin/lotteries/:id", () => {
     expect(body.lottery.applicationUrls).toEqual(["https://example.com/keep"]);
   });
 
+  it("応募開始・当選発表開始・購入開始の各日時を設定できる（Phase 10）", async () => {
+    const id = await insertLottery();
+
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({
+        applicationStartAt: "2026-08-11T14:00:00.000Z",
+        resultAnnouncementStartAt: "2026-08-14T00:00:00.000Z",
+        purchaseStartAt: "2026-08-19T00:00:00.000Z",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      lottery: { applicationStartAt: string; resultAnnouncementStartAt: string; purchaseStartAt: string };
+    };
+    expect(body.lottery.applicationStartAt).toBe("2026-08-11T14:00:00.000Z");
+    expect(body.lottery.resultAnnouncementStartAt).toBe("2026-08-14T00:00:00.000Z");
+    expect(body.lottery.purchaseStartAt).toBe("2026-08-19T00:00:00.000Z");
+  });
+
+  it("開始日時系のフィールドを指定しなければ既存値を保持する", async () => {
+    const id = await insertLottery({ applicationStartAt: "2026-08-11T14:00:00.000Z" });
+
+    const res = await app.request(`/admin/lotteries/${id}`, {
+      method: "PATCH",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({ productNameRaw: "タイトルだけ変更" }),
+    });
+    const body = (await res.json()) as { lottery: { applicationStartAt: string } };
+    expect(body.lottery.applicationStartAt).toBe("2026-08-11T14:00:00.000Z");
+  });
+
   it("フィールドを未指定のままにすると既存値を保持する", async () => {
     const id = await insertLottery({ storeNameRaw: "元の店舗" });
     const res = await app.request(`/admin/lotteries/${id}`, {
