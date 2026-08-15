@@ -54,3 +54,75 @@ export interface LotteryDetailResponse {
 export interface ApiErrorBody {
   error: { code: string; message: string; requestId: string };
 }
+
+/** `lottery_update_candidates`の1行（Phase 11）。`extractedData`はJSON文字列のまま保持する。 */
+export interface LotteryUpdateCandidateRow {
+  id: number;
+  targetLotteryId: number;
+  sourcePostId: number;
+  candidateIndex: number;
+  candidateKey: string;
+  matchScore: string | null;
+  matchReason: string | null;
+  extractedData: string;
+  status: "pending" | "applied" | "registered_as_new" | "ignored";
+  resolvedBy: string | null;
+  resolvedAt: string | null;
+  appliedFields: string | null;
+  registeredLotteryId: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LotteryUpdateCandidateListResponse {
+  items: LotteryUpdateCandidateRow[];
+  total: number;
+}
+
+/** 抽出済みデータ（`toLotteryRow`と同形）。差分表示用に必要なフィールドのみ宣言する。 */
+export interface ExtractedLotteryData {
+  productNameRaw: string | null;
+  normalizedProductName: string | null;
+  storeNameRaw: string | null;
+  normalizedStoreName: string | null;
+  storeBranchRaw: string | null;
+  region: string | null;
+  applicationStartAt: string | null;
+  applicationEndAt: string | null;
+  applicationEndDate: string | null;
+  resultAnnouncementStartAt: string | null;
+  resultAnnouncementAt: string | null;
+  resultAnnouncementDate: string | null;
+  purchaseStartAt: string | null;
+  purchaseDeadlineAt: string | null;
+  applicationUrl: string | null;
+  applicationMethod: string | null;
+  [key: string]: unknown;
+}
+
+export interface FieldChange {
+  fieldName: string;
+  oldValue: string | null;
+  newValue: string | null;
+  changeType: "updated" | "conflicting";
+}
+
+export interface SourcePostSummary {
+  id: number;
+  externalPostId: string;
+  sourceUrl: string | null;
+  bodyRaw: string | null;
+  publishedAt: string | null;
+}
+
+export interface LotteryUpdateCandidateDetailResponse {
+  candidate: LotteryUpdateCandidateRow;
+  targetLottery: LotteryRow | null;
+  extractedData: ExtractedLotteryData;
+  addableFields: FieldChange[];
+  overwritableFields: FieldChange[];
+  conflictingFields: FieldChange[];
+  matchingFields: string[];
+  newSourcePost: SourcePostSummary | null;
+  existingSourcePost: SourcePostSummary | null;
+}

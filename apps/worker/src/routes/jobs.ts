@@ -3,20 +3,22 @@ import type { Hono } from "hono";
 import type { AppEnv } from "../env.ts";
 import { processingJobs, sourcePosts } from "../db/schema.ts";
 import { dequeueOne, markJobComplete, markJobFailed } from "../repositories/processingJobRepository.ts";
-import { resolveLotteryUrls } from "../services/updateLotteryUrls.ts";
-
-const MAX_JOBS_PER_RUN = 10;
 
 /**
  * 内部ジョブ管理 API（Bearer 認証）。
  *
- * POST /internal/jobs/process?type=resolve_urls   — 既存バッチ処理
+ * POST /internal/jobs/process?type=resolve_urls   — Phase 11で能動的経路から除外（後述）
  * GET  /internal/jobs/next?type=analyze_post       — 1件デキュー（スクレイパー向け）
  * POST /internal/jobs/:id/complete                 — 完了報告
  * POST /internal/jobs/:id/fail                     — 失敗報告
  */
 export function registerJobs(app: Hono<AppEnv>): void {
-  // ----- 既存: resolve_urls バッチ処理 -----
+  // ----- resolve_urls バッチ処理: Phase 11で能動的経路から除外 -----
+  // 元々このエンドポイントを叩くCron Trigger等は存在せず（元から休眠状態）、
+  // かつ新規lottery作成時のジョブ投入（enqueueJob(db, "resolve_urls", ...)）自体も
+  // lotteryRepository.tsから削除済みのため、新しいジョブは今後一切作られない。
+  // `resolveLotteryUrls`本体・関連DBカラム（resolvedApplicationUrl等）は本ラウンドでは削除せず
+  // 残す（将来の別タスクで未使用が最終確認され次第、実処理・カラムごと削除する）。
   app.post("/internal/jobs/process", async (c) => {
     const token = c.get("env").INGEST_TOKEN;
     const authHeader = c.req.header("Authorization") ?? "";
@@ -24,34 +26,7 @@ export function registerJobs(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "unauthorized" }, 401);
     }
 
-    const jobType = c.req.query("type") ?? "resolve_urls";
-    if (jobType !== "resolve_urls") {
-      return c.json({ ok: false, error: "unsupported_job_type" }, 400);
-    }
-
-    const db = c.get("db");
-    let processed = 0;
-    let failed = 0;
-
-    for (let i = 0; i < MAX_JOBS_PER_RUN; i++) {
-      const job = await dequeueOne(db, "resolve_urls");
-      if (!job) break;
-
-      try {
-        if (job.lotteryId !== null) {
-          await resolveLotteryUrls(db, job.lotteryId);
-        }
-        await markJobComplete(db, job.id);
-        processed++;
-      } catch (e) {
-        const errMsg = e instanceof Error ? e.message : String(e);
-        await markJobFailed(db, job.id, errMsg, job.attempts, job.maxAttempts);
-        failed++;
-        console.error(`[jobs] resolve_urls lotteryId=${job.lotteryId} 失敗: ${errMsg}`);
-      }
-    }
-
-    return c.json({ ok: true, processed, failed });
+    return c.json({ ok: false, error: "unsupported_job_type" }, 400);
   });
 
   // ----- analyze_post ジョブ: スクレイパー向けデキュー -----

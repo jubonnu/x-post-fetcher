@@ -180,6 +180,77 @@ export const lotteryFieldHistory = sqliteTable("lottery_field_history", {
 export type LotteryFieldHistoryRow = typeof lotteryFieldHistory.$inferSelect;
 
 /**
+ * lottery_update_candidates — 「後続投稿が既存抽選を更新しうる」候補の保留テーブル（Phase 11）。
+ *
+ * 設計方針（x-post抽選取得フロー再設計、2026-08）: 自動処理の役割は新規情報を拾い候補として
+ * 提示するところまでで、既存`lotteries`への書き込みは管理者が明示的に選択したフィールドのみに
+ * 限定する。`matchExistingLottery`（`services/matchExistingLottery.ts`）のスコアはこのテーブルへの
+ * 振り分け判定（強い既存候補があるか）にのみ使い、スコアの高さ自体が自動書き込みの根拠には
+ * ならない（旧80点自動マージ閾値は廃止。`matchScore`/`matchReason`は管理画面での参考表示用に
+ * 保持するのみ）。
+ *
+ * 一意性は `(sourcePostId, candidateKey)` の複合（`targetLotteryId`は含めない）。
+ * 同じ投稿の再解析（同一contentHashでの再解析はそもそも起きないが、parserVersion更新時の
+ * 再解析は起きる）で、マッチング先の既存抽選が変わりうる（既存抽選側のデータが変化したため）
+ * ケースでも、`targetLotteryId`を新しい値へUPDATEするだけで同じ行を使い続けられるようにする
+ * ためで、`targetLotteryId`をキーに含めると同じ論理候補が複数行に分裂してしまう。
+ *
+ * `candidateKey`は1つの投稿が複数抽選に分割される場合（`candidateIndex`は分割順序に依存し
+ * 不安定なため）でも安定した識別ができるよう、正規化済み商品名・店舗名から生成する
+ * （`services/lotteryUpdateCandidateKey.ts`）。商品名・店舗名がどちらも空の場合のみ
+ * `candidateIndex`にフォールバックする。
+ *
+ * `status`: pending（保留中）/ applied（管理者が選択フィールドを既存抽選へ反映済み）/
+ * registered_as_new（管理者が別抽選として新規登録した）/ ignored（無視）。
+ * pending以外（=解決済み）の行は再解析で決して変更・復活させない（`resolvedBy`/`resolvedAt`を
+ * 監査のため保持する）。
+ */
+export const lotteryUpdateCandidates = sqliteTable(
+  "lottery_update_candidates",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    targetLotteryId: integer("target_lottery_id").notNull(),
+    sourcePostId: integer("source_post_id").notNull(),
+    // 1つの投稿が複数抽選に分割された場合の分割順序（表示用の参考情報。一意性には使わない）。
+    candidateIndex: integer("candidate_index").notNull().default(0),
+    // 正規化済み商品名・店舗名（無ければcandidateIndex）から生成する安定した識別キー。
+    candidateKey: text("candidate_key").notNull(),
+    matchScore: text("match_score"),
+    matchReason: text("match_reason"),
+    // 新しい投稿から抽出された抽選データ（toLotteryRowと同形のJSON）。
+    extractedData: text("extracted_data").notNull(),
+    status: text("status").notNull().default("pending"),
+    resolvedBy: text("resolved_by"),
+    resolvedAt: text("resolved_at"),
+    // status=appliedの場合に管理者が選択して反映したフィールド名のJSON配列（監査用）。
+    appliedFields: text("applied_fields"),
+    // status=registered_as_newの場合に新規作成されたlotteries.id。
+    registeredLotteryId: integer("registered_lottery_id"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at")
+      .notNull()
+      .default(sql`CURRENT_TIMESTAMP`),
+  },
+  (t) => ({
+    sourceCandidateUnique: uniqueIndex("lottery_update_candidates_source_candidate_unique").on(
+      t.sourcePostId,
+      t.candidateKey
+    ),
+    targetLotteryIdIdx: index("lottery_update_candidates_target_lottery_id_idx").on(t.targetLotteryId),
+    statusIdx: index("lottery_update_candidates_status_idx").on(t.status),
+    statusCheck: check(
+      "lottery_update_candidates_status_check",
+      sql`${t.status} IN ('pending', 'applied', 'registered_as_new', 'ignored')`
+    ),
+  })
+);
+
+export type LotteryUpdateCandidateRow = typeof lotteryUpdateCandidates.$inferSelect;
+export type LotteryUpdateCandidateInsert = typeof lotteryUpdateCandidates.$inferInsert;
+
+/**
  * processing_jobs — 非同期・リトライ可能なジョブ管理（Phase 4）。
  * jobType: 'resolve_urls'（URL 解決）| 'analyze_post'（再解析）
  * status: pending → running → done / failed（失敗時は attempts < maxAttempts なら pending に戻す）

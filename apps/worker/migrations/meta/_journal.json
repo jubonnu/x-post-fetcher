@@ -155,6 +155,13 @@
       "when": 1786729970512,
       "tag": "0021_lyrical_centennial",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1786813243068,
+      "tag": "0022_lucky_nightcrawler",
+      "breakpoints": true
     }
   ]
 }

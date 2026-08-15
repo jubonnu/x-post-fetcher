@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getTableColumns, gte, inArray, isNull, like, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, gte, isNull, like, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db, DbOrTx } from "../db/client.ts";
@@ -20,28 +20,8 @@ import {
 } from "../services/normalize.ts";
 import { matchExistingLottery, type MatchOptions } from "../services/matchExistingLottery.ts";
 import { mergeLotteryData, type FieldChange } from "../services/mergeLotteryData.ts";
-import { enqueueJob } from "./processingJobRepository.ts";
-
-/**
- * approved 状態を needs_review に降格させる「重要フィールド」セット。
- * このフィールドに conflicting な変更がある場合のみ approved → needs_review となる。
- * 空欄補完・非競合更新・同一内容では approved を維持する。
- */
-const APPROVED_CONFLICT_FIELDS = new Set([
-  "productNameRaw", "normalizedProductName",
-  "storeNameRaw", "normalizedStoreName",
-  "storeBranchRaw", "normalizedStoreBranch",
-  "applicationStartAt",
-  "applicationEndDate",      // DATE_GROUPS は g.date のフィールド名で記録される
-  "resultAnnouncementDate",  // 同上
-  "purchaseDeadlineAt",
-  "applicationUrl",
-]);
-
-/** 重要フィールドに競合（conflicting）な変更があるか判定する。 */
-function hasImportantFieldConflict(changes: FieldChange[]): boolean {
-  return changes.some((c) => c.changeType === "conflicting" && APPROVED_CONFLICT_FIELDS.has(c.fieldName));
-}
+import { buildLotteryUpdateCandidateKey, disambiguateCandidateKey } from "../services/lotteryUpdateCandidateKey.ts";
+import { upsertLotteryUpdateCandidate } from "./lotteryUpdateCandidateRepository.ts";
 
 /** completenessScore（0-1）: 商品/店舗=必須, 締切/当選/URL=重要 */
 function completeness(l: ExtractedLottery): number {
@@ -127,17 +107,23 @@ export function toLotteryRow(sourcePostId: number, l: ExtractedLottery) {
 }
 
 export interface LotteryActionResult {
-  lotteryId: number;
-  matchAction: string;
+  /** null は candidateId 側で処理されたことを示す（更新候補へUPSERTされ、既存lotteryへは未反映）。 */
+  lotteryId: number | null;
+  /** matchAction="candidate" の場合の lottery_update_candidates.id。 */
+  candidateId: number | null;
+  /** "own_updated"（同一投稿の再抽出で自身のlotteryを更新） / "own_confirmed_skipped"（承認・却下済みのため無視）
+   * / "candidate"（更新候補へUPSERT） / "new"（新規lottery挿入）。 */
+  matchAction: "own_updated" | "own_confirmed_skipped" | "candidate" | "new";
   matchScore: number;
   changedFields: string[];
 }
 
 export interface SyncLotteriesResult {
   count: number;
-  merged: number;
   inserted: number;
-  review: number;
+  candidates: number;
+  ownUpdated: number;
+  ownConfirmedSkipped: number;
   results: LotteryActionResult[];
 }
 
@@ -159,153 +145,179 @@ const CREATED_HISTORY_FIELDS: (keyof ReturnType<typeof toLotteryRow>)[] = [
 ];
 
 /**
- * この sourcePost がかつて寄与した抽選への貢献（sources / history）を取り消し、
- * 孤立した（どの source も残らない）抽選を sofft-delete（lifecycleStatus=orphaned）にする。
- * 物理削除は行わない。
+ * 既存の`lotteries`行と新しい抽出データの差分を「同じ投稿の再抽出（parserVersion更新）による
+ * 全面置き換え」として計算する。`mergeLotteryData`の空欄補完/競合保護とは異なり、同一sourcePostの
+ * 再解析はより良い抽出結果への更新とみなし、変更があったフィールドをそのまま採用する
+ * （管理者未確認の行にのみ使う。承認/却下済みの行には絶対に使わない）。
  */
-async function unlinkSourceContributions(db: Db, sourcePostId: number): Promise<void> {
-  const prior = await db
-    .select({ lotteryId: lotterySources.lotteryId })
-    .from(lotterySources)
-    .where(eq(lotterySources.sourcePostId, sourcePostId));
-  const touchedIds = [...new Set(prior.map((r) => r.lotteryId))];
-
-  await db.delete(lotterySources).where(eq(lotterySources.sourcePostId, sourcePostId));
-  await db.delete(lotteryFieldHistory).where(eq(lotteryFieldHistory.sourcePostId, sourcePostId));
-
-  if (touchedIds.length === 0) return;
-  const remaining = await db
-    .select({ lotteryId: lotterySources.lotteryId })
-    .from(lotterySources)
-    .where(inArray(lotterySources.lotteryId, touchedIds));
-  const stillLinked = new Set(remaining.map((r) => r.lotteryId));
-  const orphaned = touchedIds.filter((id) => !stillLinked.has(id));
-  if (orphaned.length > 0) {
-    const now = new Date().toISOString();
-    await db
-      .update(lotteries)
-      .set({ lifecycleStatus: "orphaned", orphanedAt: now, updatedAt: now })
-      .where(inArray(lotteries.id, orphaned));
+function diffOwnLotteryFields(oldRow: LotteryRow, newRow: ReturnType<typeof toLotteryRow>): FieldChange[] {
+  const changes: FieldChange[] = [];
+  for (const [key, newValue] of Object.entries(newRow)) {
+    if (key === "sourcePostId") continue;
+    const oldValue = (oldRow as unknown as Record<string, unknown>)[key];
+    const nv = newValue === null || newValue === undefined ? null : String(newValue);
+    const ov = oldValue === null || oldValue === undefined ? null : String(oldValue);
+    if (nv !== ov) changes.push({ fieldName: key, oldValue: ov, newValue: nv, changeType: "updated" });
   }
+  return changes;
 }
 
 /**
- * 解析結果の抽選候補群を、同一抽選マッチング（match → merge / insert）で永続化する。
- * - merge: 既存抽選へ空欄補完・競合フラグ、`lottery_field_history` と `lottery_sources` を記録。
- * - new:   新規 `lotteries` 挿入 + created 履歴 + source。
- * - review: 新規挿入だが `verificationStatus = needs_review`（両方保持・要確認）。
+ * 解析結果の抽選候補群を永続化する（Phase 11 再設計）。
+ *
+ * 自動処理の役割は新規情報を拾い候補として提示するところまでで、既存`lotteries`への書き込みは
+ * 管理者が明示的に選択したフィールドのみに限定する（誤マージよりも人間の確認が1回増える方を選ぶ）。
+ * `matchExistingLottery`のスコア・アクションは「更新候補にするか否か」の振り分け判定にのみ使い、
+ * スコアの高さ自体は自動書き込みの根拠にしない（旧80点自動マージ閾値は廃止）。
+ *
+ * 各候補ごとに3パターンに分岐する:
+ *  1. **own_updated / own_confirmed_skipped**: 同じsourcePostが直前の解析で直接作成した
+ *     （マッチング経由ではない）`lotteries`行が、商品名・店舗名ベースの安定キーで見つかった場合
+ *     （parserVersion更新による再解析）。未承認（approved/rejected以外）ならその場で全フィールドを
+ *     最新の抽出結果へ置き換える（同じ投稿の再抽出＝より良い結果への更新）。承認/却下済みなら
+ *     一切変更しない。
+ *  2. **candidate**: 他の既存抽選に対して`matchExistingLottery`が有力な候補
+ *     （score_merge/score_review、旧80/50点閾値はUI表示用ラベルとしてのみ`matchReason`に残る）と
+ *     判定した場合、`lottery_update_candidates`へUPSERT（`upsertLotteryUpdateCandidate`が
+ *     sourcePostId+candidateKeyで冪等性・解決済み保護を担う）。既存抽選への書き込みは一切しない。
+ *  3. **new**: 上記どちらにも該当しない（有力な既存候補なし）→ 新規`lotteries`挿入（従来通り）。
  */
 export async function syncLotteriesFromAnalysis(
   db: Db,
   sourcePostId: number,
   candidates: ReturnType<typeof toLotteryRow>[]
 ): Promise<SyncLotteriesResult> {
-  await unlinkSourceContributions(db, sourcePostId);
-
-  const result: SyncLotteriesResult = { count: 0, merged: 0, inserted: 0, review: 0, results: [] };
+  const result: SyncLotteriesResult = { count: 0, inserted: 0, candidates: 0, ownUpdated: 0, ownConfirmedSkipped: 0, results: [] };
   const opts = matchOpts();
 
-  for (const candidate of candidates) {
-    const existing: LotteryRow[] = await db.select().from(lotteries);
-    const m = matchExistingLottery(candidate, existing, opts);
+  const ownLotteries = await db
+    .select()
+    .from(lotteries)
+    .where(and(eq(lotteries.sourcePostId, sourcePostId), eq(lotteries.lifecycleStatus, "active")));
+  // ベースキー（商品名・店舗名のみ）でグルーピングする。同じ投稿がかつて同一の商品名・店舗名を
+  // 持つ複数のlotteryを直接作っていた場合（本来は稀だが、下記の候補側と同じ理由で起こりうる）に
+  // 備え、1件だけでなく配列で保持し、候補側の出現回数（occurrence）で対応させる。
+  const ownByKey = new Map<string, LotteryRow[]>();
+  for (const row of ownLotteries) {
+    const key = buildLotteryUpdateCandidateKey({
+      normalizedProductName: row.normalizedProductName,
+      normalizedStoreName: row.normalizedStoreName,
+      candidateIndex: -1,
+    });
+    const list = ownByKey.get(key) ?? [];
+    list.push(row);
+    ownByKey.set(key, list);
+  }
+  // 同一投稿内で「商品名・店舗名が完全に同じだが別の抽選」が複数存在する場合の衝突対策
+  // （`services/lotteryUpdateCandidateKey.ts`の`disambiguateCandidateKey`参照）。
+  // ベースキーごとの出現回数を数え、1回目はそのまま・2回目以降はキーを一意化する。
+  const keyOccurrence = new Map<string, number>();
 
-    if (m.action === "merge" && m.matchedIndex !== null) {
-      const target = existing[m.matchedIndex];
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i];
+    const baseKey = buildLotteryUpdateCandidateKey({
+      normalizedProductName: candidate.normalizedProductName,
+      normalizedStoreName: candidate.normalizedStoreName,
+      candidateIndex: i,
+    });
+    const occurrence = keyOccurrence.get(baseKey) ?? 0;
+    keyOccurrence.set(baseKey, occurrence + 1);
 
-      // rejected は自動取込で一切変更しない
-      if (target.verificationStatus === "rejected") {
+    const own = ownByKey.get(baseKey)?.[occurrence];
+
+    if (own) {
+      if (own.verificationStatus === "approved" || own.verificationStatus === "rejected") {
+        result.results.push({ lotteryId: own.id, candidateId: null, matchAction: "own_confirmed_skipped", matchScore: 0, changedFields: [] });
+        result.ownConfirmedSkipped++;
+        result.count++;
         continue;
       }
 
-      const merged = mergeLotteryData(target as unknown as Record<string, string | null>, candidate as unknown as Record<string, string | null>);
-      // approved は「重要フィールドへの競合」がある場合のみ needs_review に降格する。
-      // 同一内容・空欄補完・非重要フィールドの更新では approved を維持する。
-      // approvedBy / approvedAt は競合時も監査情報として維持する（SET 句に含めない）。
-      const newVerificationStatus =
-        target.verificationStatus === "approved"
-          ? hasImportantFieldConflict(merged.changes) ? "needs_review" : "approved"
-          : merged.verificationStatus;
-      // orphaned lottery が再び source と一致したら active に戻す（rejected 以外）
-      const lifecycleUpdate =
-        target.lifecycleStatus !== "active" ? { lifecycleStatus: "active", orphanedAt: null } : {};
-
-      const needsUpdate =
-        Object.keys(merged.updates).length > 0 ||
-        merged.hasConflict ||
-        Object.keys(lifecycleUpdate).length > 0 ||
-        newVerificationStatus !== target.verificationStatus;
-
-      if (needsUpdate) {
-        await db
-          .update(lotteries)
-          .set({ ...merged.updates, verificationStatus: newVerificationStatus, ...lifecycleUpdate, updatedAt: new Date().toISOString() })
-          .where(eq(lotteries.id, target.id));
-      }
-      for (const c of merged.changes) {
-        await db.insert(lotteryFieldHistory).values({
-          lotteryId: target.id,
-          sourcePostId,
-          fieldName: c.fieldName,
-          oldValue: c.oldValue,
-          newValue: c.newValue,
-          changeType: c.changeType,
-        });
-      }
-      await db.insert(lotterySources).values({
-        lotteryId: target.id,
-        sourcePostId,
-        matchAction: "merge",
-        matchScore: String(m.score),
-        matchReason: m.reason,
-        contributedFields: JSON.stringify(merged.changes.map((c) => c.fieldName)),
-      });
-      // URL 解決ジョブをエンキュー（applicationUrl がある場合のみ）
-      const mergedUrl = (merged.updates as Record<string, unknown>).applicationUrl ?? target.applicationUrl;
-      if (mergedUrl) await enqueueJob(db, "resolve_urls", { lotteryId: target.id });
-      result.results.push({
-        lotteryId: target.id,
-        matchAction: "merge",
-        matchScore: m.score,
-        changedFields: merged.changes.map((c) => c.fieldName),
-      });
-      result.merged++;
-    } else {
-      const isReview = m.action === "review";
-      const row = { ...candidate, verificationStatus: isReview ? "needs_review" : candidate.verificationStatus };
-      const [inserted] = await db.insert(lotteries).values(row).returning({ id: lotteries.id });
-      const lotteryId = inserted.id;
-      for (const f of CREATED_HISTORY_FIELDS) {
-        const v = candidate[f];
-        if (v != null && String(v).length > 0) {
+      const changes = diffOwnLotteryFields(own, candidate);
+      if (changes.length > 0) {
+        const patch: Record<string, unknown> = {};
+        for (const c of changes) patch[c.fieldName] = c.newValue;
+        await db.update(lotteries).set({ ...patch, updatedAt: new Date().toISOString() }).where(eq(lotteries.id, own.id));
+        for (const c of changes) {
           await db.insert(lotteryFieldHistory).values({
-            lotteryId,
+            lotteryId: own.id,
             sourcePostId,
-            fieldName: f,
-            oldValue: null,
-            newValue: String(v),
-            changeType: "created",
+            fieldName: c.fieldName,
+            oldValue: c.oldValue,
+            newValue: c.newValue,
+            changeType: "updated",
           });
         }
       }
-      await db.insert(lotterySources).values({
-        lotteryId,
-        sourcePostId,
-        matchAction: m.action,
-        matchScore: String(m.score),
-        matchReason: m.reason,
-        contributedFields: JSON.stringify(CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null)),
-      });
-      // URL 解決ジョブをエンキュー（applicationUrl がある場合のみ）
-      if (candidate.applicationUrl) await enqueueJob(db, "resolve_urls", { lotteryId });
       result.results.push({
-        lotteryId,
-        matchAction: m.action,
-        matchScore: m.score,
-        changedFields: CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null),
+        lotteryId: own.id,
+        candidateId: null,
+        matchAction: "own_updated",
+        matchScore: 0,
+        changedFields: changes.map((c) => c.fieldName),
       });
-      if (isReview) result.review++;
-      else result.inserted++;
+      result.ownUpdated++;
+      result.count++;
+      continue;
     }
+
+    const existing: LotteryRow[] = await db.select().from(lotteries).where(eq(lotteries.lifecycleStatus, "active"));
+    const m = matchExistingLottery(candidate, existing, opts);
+
+    if (m.matchedIndex !== null) {
+      const target = existing[m.matchedIndex];
+      const upserted = await upsertLotteryUpdateCandidate(db, {
+        targetLotteryId: target.id,
+        sourcePostId,
+        candidateIndex: i,
+        candidateKey: disambiguateCandidateKey(baseKey, occurrence),
+        matchScore: m.score,
+        matchReason: m.reason,
+        extractedData: candidate,
+      });
+      result.results.push({
+        lotteryId: null,
+        candidateId: upserted.id,
+        matchAction: "candidate",
+        matchScore: m.score,
+        changedFields: [],
+      });
+      if (upserted.action !== "skipped_resolved") result.candidates++;
+      result.count++;
+      continue;
+    }
+
+    const [inserted] = await db.insert(lotteries).values(candidate).returning({ id: lotteries.id });
+    const lotteryId = inserted.id;
+    for (const f of CREATED_HISTORY_FIELDS) {
+      const v = candidate[f];
+      if (v != null && String(v).length > 0) {
+        await db.insert(lotteryFieldHistory).values({
+          lotteryId,
+          sourcePostId,
+          fieldName: f,
+          oldValue: null,
+          newValue: String(v),
+          changeType: "created",
+        });
+      }
+    }
+    await db.insert(lotterySources).values({
+      lotteryId,
+      sourcePostId,
+      matchAction: "new",
+      matchScore: String(m.score),
+      matchReason: m.reason,
+      contributedFields: JSON.stringify(CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null)),
+    });
+    result.results.push({
+      lotteryId,
+      candidateId: null,
+      matchAction: "new",
+      matchScore: m.score,
+      changedFields: CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null),
+    });
+    result.inserted++;
     result.count++;
   }
 

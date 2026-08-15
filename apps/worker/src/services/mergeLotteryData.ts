@@ -30,12 +30,14 @@ const s = (v: unknown): string | null => {
   return t.length ? t : null;
 };
 
-const DATE_GROUPS = [
+/** 更新候補UI（lottery_update_candidates）の一致フィールド判定でも使うため公開する。 */
+export const DATE_GROUPS = [
   { at: "applicationEndAt", date: "applicationEndDate", precision: "applicationEndPrecision" },
   { at: "resultAnnouncementAt", date: "resultAnnouncementDate", precision: "resultAnnouncementPrecision" },
 ] as const;
 
-const SCALAR_FIELDS = [
+/** 更新候補UI（lottery_update_candidates）の一致フィールド判定でも使うため公開する。 */
+export const SCALAR_FIELDS = [
   "productNameRaw",
   "normalizedProductName",
   "cardType",

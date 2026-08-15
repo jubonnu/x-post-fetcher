@@ -7,6 +7,8 @@ import { ChangePasswordPage } from "./pages/ChangePasswordPage";
 import { LotteryListPage } from "./pages/LotteryListPage";
 import { LotteryNewPage } from "./pages/LotteryNewPage";
 import { LotteryEditPage } from "./pages/LotteryEditPage";
+import { LotteryUpdateCandidateListPage } from "./pages/LotteryUpdateCandidateListPage";
+import { LotteryUpdateCandidateDetailPage } from "./pages/LotteryUpdateCandidateDetailPage";
 
 export function App() {
   return (
@@ -36,6 +38,22 @@ export function App() {
             element={
               <ProtectedRoute>
                 <LotteryEditPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/update-candidates"
+            element={
+              <ProtectedRoute>
+                <LotteryUpdateCandidateListPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/update-candidates/:id"
+            element={
+              <ProtectedRoute>
+                <LotteryUpdateCandidateDetailPage />
               </ProtectedRoute>
             }
           />
