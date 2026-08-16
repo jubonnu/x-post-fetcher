@@ -235,6 +235,39 @@ describe("POST /admin/lotteries", () => {
     expect(listBody.items.some((i) => i.id === body.lottery.id)).toBe(true);
   });
 
+  it("開始日時（応募/当選発表/購入）と複数URLも指定できる（編集画面からの複製用、Phase 11）", async () => {
+    const res = await app.request("/admin/lotteries", {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({
+        productNameRaw: "複製元の商品",
+        storeNameRaw: "複製元の店舗",
+        applicationStartAt: "2026-09-01T00:00:00.000Z",
+        applicationEndAt: "2026-09-10T15:00:00.000Z",
+        resultAnnouncementStartAt: "2026-09-11T00:00:00.000Z",
+        resultAnnouncementAt: "2026-09-12T15:00:00.000Z",
+        purchaseStartAt: "2026-09-13T00:00:00.000Z",
+        purchaseDeadlineAt: "2026-09-20T15:00:00.000Z",
+        applicationUrls: ["https://example.com/a", "https://example.com/b"],
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      lottery: {
+        applicationStartAt: string;
+        resultAnnouncementStartAt: string;
+        purchaseStartAt: string;
+        applicationUrl: string;
+        applicationUrls: string[];
+      };
+    };
+    expect(body.lottery.applicationStartAt).toBe("2026-09-01T00:00:00.000Z");
+    expect(body.lottery.resultAnnouncementStartAt).toBe("2026-09-11T00:00:00.000Z");
+    expect(body.lottery.purchaseStartAt).toBe("2026-09-13T00:00:00.000Z");
+    expect(body.lottery.applicationUrl).toBe("https://example.com/a"); // 1件目が単一URL項目にも同期される
+    expect(body.lottery.applicationUrls).toEqual(["https://example.com/a", "https://example.com/b"]);
+  });
+
   it("商品名・店舗名以外は省略できる", async () => {
     const res = await app.request("/admin/lotteries", {
       method: "POST",

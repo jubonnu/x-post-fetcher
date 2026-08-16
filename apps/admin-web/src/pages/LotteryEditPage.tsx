@@ -3,20 +3,10 @@ import { useNavigate, useParams } from "react-router-dom";
 import { apiRequest, ApiError } from "../api/client";
 import { VerificationBadge } from "../components/VerificationBadge";
 import type { LotteryDetailResponse, LotteryListResponse, LotteryRow } from "../types";
+import type { LotteryFormState } from "./LotteryNewPage";
 import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../utils/datetime";
 
-interface FormState {
-  productNameRaw: string;
-  storeNameRaw: string;
-  applicationStartAt: string;
-  applicationEndAt: string;
-  resultAnnouncementStartAt: string;
-  resultAnnouncementAt: string;
-  purchaseStartAt: string;
-  purchaseDeadlineAt: string;
-  applicationMethod: string;
-  applicationUrls: string[];
-}
+type FormState = LotteryFormState;
 
 function toFormState(lottery: LotteryRow): FormState {
   const urls =
@@ -185,6 +175,15 @@ export function LotteryEditPage() {
     }
   }
 
+  /**
+   * 現在フォームに入っている内容（未保存の編集も含む）を引き継いで新規作成画面へ遷移する。
+   * 類似の抽選（別の日程・別枠等）をゼロから入力し直さず済むようにするため（画像は複製しない）。
+   */
+  function handleDuplicate() {
+    if (!form) return;
+    navigate("/lotteries/new", { state: { duplicateFrom: form } });
+  }
+
   async function handleApproveOrReject(action: "approve" | "reject") {
     if (action === "reject") {
       const reason = window.prompt("却下理由（任意）");
@@ -205,9 +204,14 @@ export function LotteryEditPage() {
         <h1>抽選編集</h1>
         {/* 一覧の絞り込み（タブ・X投稿日フィルタ等）を維持したまま戻るため、固定URLではなく
             ブラウザ履歴を1つ戻る（一覧から遷移してきた場合、直前のURLは常に一覧のURLになる）。 */}
-        <button type="button" className="secondary" onClick={() => navigate(-1)}>
-          一覧へ戻る
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="secondary" onClick={handleDuplicate}>
+            複製して新規作成
+          </button>
+          <button type="button" className="secondary" onClick={() => navigate(-1)}>
+            一覧へ戻る
+          </button>
+        </div>
       </div>
 
       <div className="card" style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 14 }}>

@@ -1,37 +1,63 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { apiRequest, ApiError } from "../api/client";
 import type { LotteryDetailResponse } from "../types";
 import { fromDatetimeLocalValue } from "../utils/datetime";
 
-interface FormState {
+export interface LotteryFormState {
   productNameRaw: string;
   storeNameRaw: string;
+  applicationStartAt: string;
   applicationEndAt: string;
+  resultAnnouncementStartAt: string;
   resultAnnouncementAt: string;
+  purchaseStartAt: string;
   purchaseDeadlineAt: string;
   applicationMethod: string;
-  applicationUrl: string;
+  applicationUrls: string[];
 }
 
-const EMPTY_FORM: FormState = {
+const EMPTY_FORM: LotteryFormState = {
   productNameRaw: "",
   storeNameRaw: "",
+  applicationStartAt: "",
   applicationEndAt: "",
+  resultAnnouncementStartAt: "",
   resultAnnouncementAt: "",
+  purchaseStartAt: "",
   purchaseDeadlineAt: "",
   applicationMethod: "",
-  applicationUrl: "",
+  applicationUrls: [],
 };
+
+/** 抽選編集画面の「複製して新規作成」から渡される`location.state`の形。 */
+interface DuplicateLocationState {
+  duplicateFrom?: LotteryFormState;
+}
 
 export function LotteryNewPage() {
   const navigate = useNavigate();
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const location = useLocation();
+  const duplicateFrom = (location.state as DuplicateLocationState | null)?.duplicateFrom;
+  const isDuplicate = Boolean(duplicateFrom);
+  const [form, setForm] = useState<LotteryFormState>(() => (duplicateFrom ? { ...duplicateFrom } : EMPTY_FORM));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function updateField<K extends keyof FormState>(key: K, value: string) {
+  function updateField<K extends Exclude<keyof LotteryFormState, "applicationUrls">>(key: K, value: string) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function updateApplicationUrl(index: number, value: string) {
+    setForm((prev) => ({ ...prev, applicationUrls: prev.applicationUrls.map((u, i) => (i === index ? value : u)) }));
+  }
+
+  function addApplicationUrl() {
+    setForm((prev) => ({ ...prev, applicationUrls: [...prev.applicationUrls, ""] }));
+  }
+
+  function removeApplicationUrl(index: number) {
+    setForm((prev) => ({ ...prev, applicationUrls: prev.applicationUrls.filter((_, i) => i !== index) }));
   }
 
   async function handleCreate(e: FormEvent) {
@@ -48,11 +74,14 @@ export function LotteryNewPage() {
         body: {
           productNameRaw: form.productNameRaw.trim(),
           storeNameRaw: form.storeNameRaw.trim(),
+          applicationStartAt: fromDatetimeLocalValue(form.applicationStartAt),
           applicationEndAt: fromDatetimeLocalValue(form.applicationEndAt),
+          resultAnnouncementStartAt: fromDatetimeLocalValue(form.resultAnnouncementStartAt),
           resultAnnouncementAt: fromDatetimeLocalValue(form.resultAnnouncementAt),
+          purchaseStartAt: fromDatetimeLocalValue(form.purchaseStartAt),
           purchaseDeadlineAt: fromDatetimeLocalValue(form.purchaseDeadlineAt),
           applicationMethod: form.applicationMethod || null,
-          applicationUrl: form.applicationUrl || null,
+          applicationUrls: form.applicationUrls.map((u) => u.trim()).filter((u) => u.length > 0),
         },
       });
       // 作成後は編集画面へ遷移する（画像アップロード等はそちらで続けて行える）
@@ -67,13 +96,19 @@ export function LotteryNewPage() {
   return (
     <div className="page">
       <div className="header-row">
-        <h1>抽選を手動で追加</h1>
+        <h1>{isDuplicate ? "抽選を複製して新規作成" : "抽選を手動で追加"}</h1>
         {/* 一覧の絞り込み（タブ・X投稿日フィルタ等）を維持したまま戻るため、固定URLではなく
             ブラウザ履歴を1つ戻る。 */}
         <button type="button" className="secondary" onClick={() => navigate(-1)}>
           一覧へ戻る
         </button>
       </div>
+
+      {isDuplicate ? (
+        <p className="muted" style={{ marginBottom: 16 }}>
+          複製元の内容を引き継いでいます。内容を確認・修正してから作成してください（画像は引き継がれません）。
+        </p>
+      ) : null}
 
       <form className="card" onSubmit={handleCreate}>
         <h2>抽選情報</h2>
@@ -94,33 +129,72 @@ export function LotteryNewPage() {
         </div>
 
         <div className="field">
-          <label htmlFor="applicationEndAt">応募締切</label>
-          <input
-            id="applicationEndAt"
-            type="datetime-local"
-            value={form.applicationEndAt}
-            onChange={(e) => updateField("applicationEndAt", e.target.value)}
-          />
+          <label htmlFor="applicationEndAt">応募期間（開始 〜 締切）</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="applicationStartAt"
+              type="datetime-local"
+              aria-label="応募開始"
+              value={form.applicationStartAt}
+              onChange={(e) => updateField("applicationStartAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="applicationEndAt"
+              type="datetime-local"
+              aria-label="応募締切"
+              value={form.applicationEndAt}
+              onChange={(e) => updateField("applicationEndAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+          </div>
         </div>
 
         <div className="field">
-          <label htmlFor="resultAnnouncementAt">当選発表</label>
-          <input
-            id="resultAnnouncementAt"
-            type="datetime-local"
-            value={form.resultAnnouncementAt}
-            onChange={(e) => updateField("resultAnnouncementAt", e.target.value)}
-          />
+          <label htmlFor="resultAnnouncementAt">当選発表（開始 〜 終了）</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="resultAnnouncementStartAt"
+              type="datetime-local"
+              aria-label="当選発表開始"
+              value={form.resultAnnouncementStartAt}
+              onChange={(e) => updateField("resultAnnouncementStartAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="resultAnnouncementAt"
+              type="datetime-local"
+              aria-label="当選発表"
+              value={form.resultAnnouncementAt}
+              onChange={(e) => updateField("resultAnnouncementAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+          </div>
         </div>
 
         <div className="field">
-          <label htmlFor="purchaseDeadlineAt">購入期限</label>
-          <input
-            id="purchaseDeadlineAt"
-            type="datetime-local"
-            value={form.purchaseDeadlineAt}
-            onChange={(e) => updateField("purchaseDeadlineAt", e.target.value)}
-          />
+          <label htmlFor="purchaseDeadlineAt">購入期間（開始 〜 期限）</label>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="purchaseStartAt"
+              type="datetime-local"
+              aria-label="購入開始"
+              value={form.purchaseStartAt}
+              onChange={(e) => updateField("purchaseStartAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <span className="muted">〜</span>
+            <input
+              id="purchaseDeadlineAt"
+              type="datetime-local"
+              aria-label="購入期限"
+              value={form.purchaseDeadlineAt}
+              onChange={(e) => updateField("purchaseDeadlineAt", e.target.value)}
+              style={{ flex: 1 }}
+            />
+          </div>
         </div>
 
         <div className="field">
@@ -134,8 +208,24 @@ export function LotteryNewPage() {
         </div>
 
         <div className="field">
-          <label htmlFor="applicationUrl">応募ページ（URL）</label>
-          <input id="applicationUrl" type="text" value={form.applicationUrl} onChange={(e) => updateField("applicationUrl", e.target.value)} />
+          <label>応募ページ（URL）</label>
+          {form.applicationUrls.map((url, index) => (
+            <div key={index} style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+              <input
+                type="text"
+                aria-label={`応募ページURL ${index + 1}`}
+                value={url}
+                onChange={(e) => updateApplicationUrl(index, e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button type="button" className="danger" onClick={() => removeApplicationUrl(index)}>
+                削除
+              </button>
+            </div>
+          ))}
+          <button type="button" className="secondary" onClick={addApplicationUrl}>
+            ＋ URLを追加
+          </button>
         </div>
 
         {error ? <p className="error-text">{error}</p> : null}

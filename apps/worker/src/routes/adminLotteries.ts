@@ -52,11 +52,17 @@ const nullableText = z
 const createLotterySchema = z.object({
   productNameRaw: z.string().trim().min(1).max(2000),
   storeNameRaw: z.string().trim().min(1).max(2000),
+  // 抽選編集画面からの「複製して新規作成」でも使うため、編集画面と同じ項目一式を受け付ける。
+  applicationStartAt: z.string().datetime().nullable().optional(),
   applicationEndAt: z.string().datetime().nullable().optional(),
+  resultAnnouncementStartAt: z.string().datetime().nullable().optional(),
   resultAnnouncementAt: z.string().datetime().nullable().optional(),
+  purchaseStartAt: z.string().datetime().nullable().optional(),
   purchaseDeadlineAt: z.string().datetime().nullable().optional(),
   applicationMethod: nullableText.optional(),
   applicationUrl: nullableText.optional(),
+  // 応募ページURLの複数指定（指定時はapplicationUrlより優先する）。
+  applicationUrls: z.array(z.string().max(2000)).max(20).nullable().optional(),
 });
 
 const updateLotterySchema = z.object({

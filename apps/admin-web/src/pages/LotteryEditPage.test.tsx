@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LotteryEditPage } from "./LotteryEditPage";
 import * as client from "../api/client";
@@ -40,10 +40,18 @@ function renderEditPage(id = "42") {
     <MemoryRouter initialEntries={["/", `/lotteries/${id}`]} initialIndex={1}>
       <Routes>
         <Route path="/lotteries/:id" element={<LotteryEditPage />} />
+        <Route path="/lotteries/new" element={<DuplicateDestinationProbe />} />
         <Route path="/" element={<div>一覧画面</div>} />
       </Routes>
     </MemoryRouter>
   );
+}
+
+/** 「複製して新規作成」の遷移先で、渡されたlocation.stateの内容をテキストとして表示する（アサート用）。 */
+function DuplicateDestinationProbe() {
+  const location = useLocation();
+  const state = location.state as { duplicateFrom?: { productNameRaw: string; storeNameRaw: string } } | null;
+  return <div>新規作成画面: {state?.duplicateFrom?.productNameRaw} / {state?.duplicateFrom?.storeNameRaw}</div>;
 }
 
 describe("LotteryEditPage", () => {
@@ -89,6 +97,21 @@ describe("LotteryEditPage", () => {
       )
     );
     expect(await screen.findByText("保存しました")).toBeInTheDocument();
+  });
+
+  it("「複製して新規作成」で現在のフォーム内容を引き継いで新規作成画面へ遷移する", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({
+      lottery: makeLottery({ productNameRaw: "複製元商品", storeNameRaw: "複製元店舗" }),
+      sources: [],
+      fieldHistory: [],
+    } satisfies LotteryDetailResponse);
+
+    renderEditPage();
+    await screen.findByDisplayValue("複製元商品");
+
+    fireEvent.click(screen.getByRole("button", { name: "複製して新規作成" }));
+
+    expect(await screen.findByText("新規作成画面: 複製元商品 / 複製元店舗")).toBeInTheDocument();
   });
 
   describe("応募ページURL（複数追加）", () => {

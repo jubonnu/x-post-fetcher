@@ -32,11 +32,14 @@ function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
   } as LotteryRow;
 }
 
-function renderNewPage() {
+function renderNewPage(locationState?: unknown) {
   // "戻る"はブラウザ履歴を1つ戻る実装のため、一覧("/")を経由してから遷移してきた状態を再現する
   // （historyが無いとnavigate(-1)が何もしない）。
   return render(
-    <MemoryRouter initialEntries={["/", "/lotteries/new"]} initialIndex={1}>
+    <MemoryRouter
+      initialEntries={["/", { pathname: "/lotteries/new", state: locationState }]}
+      initialIndex={1}
+    >
       <Routes>
         <Route path="/lotteries/new" element={<LotteryNewPage />} />
         <Route path="/lotteries/:id" element={<div>編集画面</div>} />
@@ -108,5 +111,49 @@ describe("LotteryNewPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "キャンセル" }));
 
     expect(await screen.findByText("一覧画面")).toBeInTheDocument();
+  });
+
+  it("編集画面からの複製（location.state.duplicateFrom）でフォームが事前入力される", async () => {
+    const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
+      lottery: makeLottery(),
+      sources: [],
+      fieldHistory: [],
+    } satisfies LotteryDetailResponse);
+
+    renderNewPage({
+      duplicateFrom: {
+        productNameRaw: "複製元商品",
+        storeNameRaw: "複製元店舗",
+        applicationStartAt: "2026-09-01T00:00",
+        applicationEndAt: "2026-09-10T15:00",
+        resultAnnouncementStartAt: "",
+        resultAnnouncementAt: "",
+        purchaseStartAt: "",
+        purchaseDeadlineAt: "",
+        applicationMethod: "先着",
+        applicationUrls: ["https://example.com/dup"],
+      },
+    });
+
+    expect(await screen.findByText("抽選を複製して新規作成")).toBeInTheDocument();
+    expect(screen.getByLabelText("タイトル *")).toHaveValue("複製元商品");
+    expect(screen.getByLabelText("店舗 *")).toHaveValue("複製元店舗");
+    expect(screen.getByLabelText("応募開始")).toHaveValue("2026-09-01T00:00");
+    expect(screen.getByLabelText("応募締切")).toHaveValue("2026-09-10T15:00");
+    expect(screen.getByLabelText("応募ページURL 1")).toHaveValue("https://example.com/dup");
+
+    fireEvent.click(screen.getByRole("button", { name: "作成" }));
+    await waitFor(() =>
+      expect(apiRequestSpy).toHaveBeenCalledWith(
+        "/admin/lotteries",
+        expect.objectContaining({
+          body: expect.objectContaining({
+            productNameRaw: "複製元商品",
+            storeNameRaw: "複製元店舗",
+            applicationUrls: ["https://example.com/dup"],
+          }),
+        })
+      )
+    );
   });
 });

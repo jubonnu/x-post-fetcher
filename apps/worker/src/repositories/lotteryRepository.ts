@@ -731,11 +731,16 @@ export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminL
 export interface AdminLotteryCreateInput {
   productNameRaw: string;
   storeNameRaw: string;
+  applicationStartAt?: string | null;
   applicationEndAt?: string | null;
+  resultAnnouncementStartAt?: string | null;
   resultAnnouncementAt?: string | null;
+  purchaseStartAt?: string | null;
   purchaseDeadlineAt?: string | null;
   applicationMethod?: string | null;
   applicationUrl?: string | null;
+  /** 応募ページURLの複数指定。指定時はapplicationUrlより優先する（編集画面からの複製用）。 */
+  applicationUrls?: string[] | null;
 }
 
 /**
@@ -744,9 +749,19 @@ export interface AdminLotteryCreateInput {
  * 以降の自動再解析でもこの抽選が重複統合・空欄補完の対象になるようにする。
  * 管理者が直接入力した内容のため、`verificationStatus`は自動抽出と同じ既定（extracted）にする
  * （承認は既存の「承認する」ボタンで別途行う一貫した運用にするため、作成時に自動承認はしない）。
+ * 編集画面の「複製して新規作成」もこの関数を経由する（Phase 11）。
  */
 export async function createLotteryByAdmin(db: DbOrTx, input: AdminLotteryCreateInput): Promise<number> {
   const now = new Date().toISOString();
+  const urls = (input.applicationUrls && input.applicationUrls.length > 0
+    ? input.applicationUrls
+    : input.applicationUrl
+      ? [input.applicationUrl]
+      : []
+  )
+    .map((u) => u.trim())
+    .filter((u) => u.length > 0);
+
   const [row] = await db
     .insert(lotteries)
     .values({
@@ -756,15 +771,18 @@ export async function createLotteryByAdmin(db: DbOrTx, input: AdminLotteryCreate
       storeNameRaw: input.storeNameRaw,
       normalizedStoreName: normalizeStoreName(input.storeNameRaw),
       normalizerVersion: NORMALIZER_VERSION,
+      applicationStartAt: input.applicationStartAt ?? null,
       applicationEndAt: input.applicationEndAt ?? null,
       applicationEndPrecision: input.applicationEndAt ? "exact" : "unknown",
+      resultAnnouncementStartAt: input.resultAnnouncementStartAt ?? null,
       resultAnnouncementAt: input.resultAnnouncementAt ?? null,
       resultAnnouncementPrecision: input.resultAnnouncementAt ? "exact" : "unknown",
+      purchaseStartAt: input.purchaseStartAt ?? null,
       purchaseDeadlineAt: input.purchaseDeadlineAt ?? null,
       applicationMethod: input.applicationMethod ?? null,
-      applicationUrl: input.applicationUrl ?? null,
-      applicationUrls: serializeApplicationUrls(input.applicationUrl ? [input.applicationUrl] : null),
-      resolvedApplicationUrl: input.applicationUrl ?? null,
+      applicationUrl: urls[0] ?? null,
+      applicationUrls: serializeApplicationUrls(urls.length > 0 ? urls : null),
+      resolvedApplicationUrl: urls[0] ?? null,
       status: "open",
       verificationStatus: "extracted",
       createdAt: now,
