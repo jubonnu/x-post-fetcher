@@ -8,6 +8,7 @@ import type { LotteryListResponse, LotteryRow } from "../types";
 
 function makeLottery(overrides: Partial<LotteryRow> & { id: number }): LotteryRow {
   return {
+    sourcePostId: null,
     productNameRaw: `商品${overrides.id}`,
     normalizedProductName: null,
     storeNameRaw: `店舗${overrides.id}`,

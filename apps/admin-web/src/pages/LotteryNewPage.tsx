@@ -33,12 +33,16 @@ const EMPTY_FORM: LotteryFormState = {
 /** 抽選編集画面の「複製して新規作成」から渡される`location.state`の形。 */
 interface DuplicateLocationState {
   duplicateFrom?: LotteryFormState;
+  /** 複製元と同じ元投稿のID（管理一覧の「X投稿日」表示を引き継ぐため）。元投稿が無ければnull。 */
+  duplicateSourcePostId?: number | null;
 }
 
 export function LotteryNewPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const duplicateFrom = (location.state as DuplicateLocationState | null)?.duplicateFrom;
+  const duplicateState = location.state as DuplicateLocationState | null;
+  const duplicateFrom = duplicateState?.duplicateFrom;
+  const duplicateSourcePostId = duplicateState?.duplicateSourcePostId ?? null;
   const isDuplicate = Boolean(duplicateFrom);
   const [form, setForm] = useState<LotteryFormState>(() => (duplicateFrom ? { ...duplicateFrom } : EMPTY_FORM));
   const [saving, setSaving] = useState(false);
@@ -82,6 +86,7 @@ export function LotteryNewPage() {
           purchaseDeadlineAt: fromDatetimeLocalValue(form.purchaseDeadlineAt),
           applicationMethod: form.applicationMethod || null,
           applicationUrls: form.applicationUrls.map((u) => u.trim()).filter((u) => u.length > 0),
+          ...(duplicateSourcePostId ? { sourcePostId: duplicateSourcePostId } : {}),
         },
       });
       // 作成後は編集画面へ遷移する（画像アップロード等はそちらで続けて行える）

@@ -8,6 +8,7 @@ import type { LotteryDetailResponse, LotteryRow } from "../types";
 function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
   return {
     id: 99,
+    sourcePostId: null,
     productNameRaw: "手動追加商品",
     normalizedProductName: null,
     storeNameRaw: "手動追加店舗",
@@ -133,6 +134,7 @@ describe("LotteryNewPage", () => {
         applicationMethod: "先着",
         applicationUrls: ["https://example.com/dup"],
       },
+      duplicateSourcePostId: 555,
     });
 
     expect(await screen.findByText("抽選を複製して新規作成")).toBeInTheDocument();
@@ -151,9 +153,42 @@ describe("LotteryNewPage", () => {
             productNameRaw: "複製元商品",
             storeNameRaw: "複製元店舗",
             applicationUrls: ["https://example.com/dup"],
+            sourcePostId: 555,
           }),
         })
       )
     );
+  });
+
+  it("複製元にsourcePostIdが無ければ、作成リクエストにsourcePostIdを含めない（通常の手動追加と同じ扱い）", async () => {
+    const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
+      lottery: makeLottery(),
+      sources: [],
+      fieldHistory: [],
+    } satisfies LotteryDetailResponse);
+
+    renderNewPage({
+      duplicateFrom: {
+        productNameRaw: "複製元商品B",
+        storeNameRaw: "複製元店舗B",
+        applicationStartAt: "",
+        applicationEndAt: "",
+        resultAnnouncementStartAt: "",
+        resultAnnouncementAt: "",
+        purchaseStartAt: "",
+        purchaseDeadlineAt: "",
+        applicationMethod: "",
+        applicationUrls: [],
+      },
+      duplicateSourcePostId: null,
+    });
+
+    await screen.findByDisplayValue("複製元商品B");
+    fireEvent.click(screen.getByRole("button", { name: "作成" }));
+
+    await waitFor(() => expect(apiRequestSpy).toHaveBeenCalled());
+    const call = apiRequestSpy.mock.calls[0];
+    const body = (call[1] as { body: Record<string, unknown> }).body;
+    expect(body).not.toHaveProperty("sourcePostId");
   });
 });

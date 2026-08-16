@@ -9,6 +9,7 @@ import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../utils/datetime"
 function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
   return {
     id: 42,
+    sourcePostId: null,
     productNameRaw: "テスト商品",
     normalizedProductName: null,
     storeNameRaw: "テスト店舗",
@@ -50,8 +51,16 @@ function renderEditPage(id = "42") {
 /** 「複製して新規作成」の遷移先で、渡されたlocation.stateの内容をテキストとして表示する（アサート用）。 */
 function DuplicateDestinationProbe() {
   const location = useLocation();
-  const state = location.state as { duplicateFrom?: { productNameRaw: string; storeNameRaw: string } } | null;
-  return <div>新規作成画面: {state?.duplicateFrom?.productNameRaw} / {state?.duplicateFrom?.storeNameRaw}</div>;
+  const state = location.state as {
+    duplicateFrom?: { productNameRaw: string; storeNameRaw: string };
+    duplicateSourcePostId?: number | null;
+  } | null;
+  return (
+    <div>
+      新規作成画面: {state?.duplicateFrom?.productNameRaw} / {state?.duplicateFrom?.storeNameRaw} / sourcePostId=
+      {String(state?.duplicateSourcePostId)}
+    </div>
+  );
 }
 
 describe("LotteryEditPage", () => {
@@ -99,9 +108,9 @@ describe("LotteryEditPage", () => {
     expect(await screen.findByText("保存しました")).toBeInTheDocument();
   });
 
-  it("「複製して新規作成」で現在のフォーム内容を引き継いで新規作成画面へ遷移する", async () => {
+  it("「複製して新規作成」で現在のフォーム内容とsourcePostId（X投稿日引き継ぎ用）を引き継いで新規作成画面へ遷移する", async () => {
     vi.spyOn(client, "apiRequest").mockResolvedValue({
-      lottery: makeLottery({ productNameRaw: "複製元商品", storeNameRaw: "複製元店舗" }),
+      lottery: makeLottery({ productNameRaw: "複製元商品", storeNameRaw: "複製元店舗", sourcePostId: 777 }),
       sources: [],
       fieldHistory: [],
     } satisfies LotteryDetailResponse);
@@ -111,7 +120,22 @@ describe("LotteryEditPage", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "複製して新規作成" }));
 
-    expect(await screen.findByText("新規作成画面: 複製元商品 / 複製元店舗")).toBeInTheDocument();
+    expect(await screen.findByText("新規作成画面: 複製元商品 / 複製元店舗 / sourcePostId=777")).toBeInTheDocument();
+  });
+
+  it("複製元にsourcePostIdが無ければnullを引き継ぐ", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({
+      lottery: makeLottery({ productNameRaw: "手動追加元商品", storeNameRaw: "手動追加元店舗", sourcePostId: null }),
+      sources: [],
+      fieldHistory: [],
+    } satisfies LotteryDetailResponse);
+
+    renderEditPage();
+    await screen.findByDisplayValue("手動追加元商品");
+
+    fireEvent.click(screen.getByRole("button", { name: "複製して新規作成" }));
+
+    expect(await screen.findByText("新規作成画面: 手動追加元商品 / 手動追加元店舗 / sourcePostId=null")).toBeInTheDocument();
   });
 
   describe("応募ページURL（複数追加）", () => {

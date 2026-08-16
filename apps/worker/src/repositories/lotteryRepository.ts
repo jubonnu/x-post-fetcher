@@ -741,10 +741,19 @@ export interface AdminLotteryCreateInput {
   applicationUrl?: string | null;
   /** 応募ページURLの複数指定。指定時はapplicationUrlより優先する（編集画面からの複製用）。 */
   applicationUrls?: string[] | null;
+  /**
+   * 「複製して新規作成」で、複製元と同じ元投稿を引き継ぐ場合のみ指定する（管理一覧の
+   * 「X投稿日」表示・絞り込みは`sourcePosts.publishedAt`への参照で行われるため）。
+   * 通常の手動追加では未指定（＝スクレイピング由来ではないためnull）のまま。
+   * 1つの`source_post`に複数`lotteries`が紐づくこと自体は複数抽選投稿の分割で元々起こりうるため、
+   * 複製元と重複させても既存の同一投稿再解析ロジックの前提を壊さない（Phase 11）。
+   */
+  sourcePostId?: number | null;
 }
 
 /**
- * 管理画面からの手動追加（Phase 9）。スクレイピング由来ではないため`sourcePostId`は無し。
+ * 管理画面からの手動追加（Phase 9）。スクレイピング由来ではないため`sourcePostId`は無し
+ * （「複製して新規作成」時のみ、複製元の`sourcePostId`を明示的に引き継ぐことがある）。
  * `normalizedProductName`/`normalizedStoreName`は自動抽出と同じnormalize関数で計算し、
  * 以降の自動再解析でもこの抽選が重複統合・空欄補完の対象になるようにする。
  * 管理者が直接入力した内容のため、`verificationStatus`は自動抽出と同じ既定（extracted）にする
@@ -765,7 +774,7 @@ export async function createLotteryByAdmin(db: DbOrTx, input: AdminLotteryCreate
   const [row] = await db
     .insert(lotteries)
     .values({
-      sourcePostId: null,
+      sourcePostId: input.sourcePostId ?? null,
       productNameRaw: input.productNameRaw,
       normalizedProductName: normalizeProductName(input.productNameRaw),
       storeNameRaw: input.storeNameRaw,

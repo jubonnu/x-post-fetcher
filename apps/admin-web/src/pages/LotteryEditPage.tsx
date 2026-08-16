@@ -178,10 +178,12 @@ export function LotteryEditPage() {
   /**
    * 現在フォームに入っている内容（未保存の編集も含む）を引き継いで新規作成画面へ遷移する。
    * 類似の抽選（別の日程・別枠等）をゼロから入力し直さず済むようにするため（画像は複製しない）。
+   * `sourcePostId`（元のX投稿）も引き継ぎ、管理一覧の「X投稿日」がそのまま表示されるようにする
+   * （1つの投稿に複数抽選が紐づくこと自体は複数抽選分割で元々起こりうるため問題ない）。
    */
   function handleDuplicate() {
-    if (!form) return;
-    navigate("/lotteries/new", { state: { duplicateFrom: form } });
+    if (!form || !lottery) return;
+    navigate("/lotteries/new", { state: { duplicateFrom: form, duplicateSourcePostId: lottery.sourcePostId } });
   }
 
   async function handleApproveOrReject(action: "approve" | "reject") {

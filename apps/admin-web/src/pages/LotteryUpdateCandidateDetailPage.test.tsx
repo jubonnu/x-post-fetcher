@@ -29,6 +29,7 @@ function makeCandidate(overrides: Partial<LotteryUpdateCandidateRow> = {}): Lott
 function makeLottery(overrides: Partial<LotteryRow> = {}): LotteryRow {
   return {
     id: 100,
+    sourcePostId: null,
     productNameRaw: "既存商品",
     normalizedProductName: "既存商品",
     storeNameRaw: "既存店舗",

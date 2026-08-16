@@ -8,6 +8,8 @@ export interface AdminUser {
 
 export interface LotteryRow {
   id: number;
+  /** 元投稿（source_posts）のID。スクレイピング由来でなければnull（Phase 9）。 */
+  sourcePostId: number | null;
   productNameRaw: string | null;
   normalizedProductName: string | null;
   storeNameRaw: string | null;

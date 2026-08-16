@@ -63,6 +63,10 @@ const createLotterySchema = z.object({
   applicationUrl: nullableText.optional(),
   // 応募ページURLの複数指定（指定時はapplicationUrlより優先する）。
   applicationUrls: z.array(z.string().max(2000)).max(20).nullable().optional(),
+  // 「複製して新規作成」で、複製元と同じ元投稿（X投稿日表示用）を引き継ぐ場合のみ指定する。
+  // 手動追加フォームでは指定しない（存在しないIDが送られても実害はない設計にはせず、
+  // 明示的にnullable/optionalとして「無ければ通常の手動追加と同じ」ことを表現する）。
+  sourcePostId: z.number().int().positive().nullable().optional(),
 });
 
 const updateLotterySchema = z.object({

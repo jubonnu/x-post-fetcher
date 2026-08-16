@@ -268,6 +268,28 @@ describe("POST /admin/lotteries", () => {
     expect(body.lottery.applicationUrls).toEqual(["https://example.com/a", "https://example.com/b"]);
   });
 
+  it("sourcePostIdを指定すると、複製元と同じ元投稿としてX投稿日が一覧に表示される（複製時の引き継ぎ用、Phase 11）", async () => {
+    const sourcePostId = await insertSourcePost({ publishedAt: "2026-08-12T09:00:00.000Z" });
+
+    const res = await app.request("/admin/lotteries", {
+      method: "POST",
+      headers: jsonAuthHeaders(),
+      body: JSON.stringify({
+        productNameRaw: "X投稿日引き継ぎ商品",
+        storeNameRaw: "店舗",
+        sourcePostId,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { lottery: { id: number; sourcePostId: number } };
+    expect(body.lottery.sourcePostId).toBe(sourcePostId);
+
+    const listRes = await app.request("/admin/lotteries?search=X投稿日引き継ぎ商品", { headers: authHeaders() });
+    const listBody = (await listRes.json()) as { items: { id: number; sourcePostPublishedAt: string | null }[] };
+    const item = listBody.items.find((i) => i.id === body.lottery.id);
+    expect(item?.sourcePostPublishedAt).toBe("2026-08-12T09:00:00.000Z");
+  });
+
   it("商品名・店舗名以外は省略できる", async () => {
     const res = await app.request("/admin/lotteries", {
       method: "POST",
