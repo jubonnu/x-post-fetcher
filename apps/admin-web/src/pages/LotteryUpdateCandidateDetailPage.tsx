@@ -188,7 +188,7 @@ export function LotteryUpdateCandidateDetailPage() {
             この候補は既に処理済みです（{candidate.status} / {candidate.resolvedBy ?? "-"}）。
           </p>
         ) : null}
-        <div style={{ display: "flex", gap: 16, marginTop: 10, fontSize: 13 }}>
+        <div className="source-links-row">
           {existingSourcePost ? (
             <a href={existingSourcePost.sourceUrl ?? "#"} target="_blank" rel="noreferrer">
               既存抽選の元投稿を見る（{formatPostDate(existingSourcePost.publishedAt)}）

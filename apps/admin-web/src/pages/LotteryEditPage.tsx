@@ -311,14 +311,13 @@ export function LotteryEditPage() {
 
         <div className="field">
           <label htmlFor="applicationEndAt">応募期間（開始 〜 締切）</label>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="datetime-range-row">
             <input
               id="applicationStartAt"
               type="datetime-local"
               aria-label="応募開始"
               value={form.applicationStartAt}
               onChange={(e) => updateField("applicationStartAt", e.target.value)}
-              style={{ flex: 1 }}
             />
             <span className="muted">〜</span>
             <input
@@ -327,21 +326,19 @@ export function LotteryEditPage() {
               aria-label="応募締切"
               value={form.applicationEndAt}
               onChange={(e) => updateField("applicationEndAt", e.target.value)}
-              style={{ flex: 1 }}
             />
           </div>
         </div>
 
         <div className="field">
           <label htmlFor="resultAnnouncementAt">当選発表（開始 〜 終了）</label>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="datetime-range-row">
             <input
               id="resultAnnouncementStartAt"
               type="datetime-local"
               aria-label="当選発表開始"
               value={form.resultAnnouncementStartAt}
               onChange={(e) => updateField("resultAnnouncementStartAt", e.target.value)}
-              style={{ flex: 1 }}
             />
             <span className="muted">〜</span>
             <input
@@ -350,21 +347,19 @@ export function LotteryEditPage() {
               aria-label="当選発表"
               value={form.resultAnnouncementAt}
               onChange={(e) => updateField("resultAnnouncementAt", e.target.value)}
-              style={{ flex: 1 }}
             />
           </div>
         </div>
 
         <div className="field">
           <label htmlFor="purchaseDeadlineAt">購入期間（開始 〜 期限）</label>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="datetime-range-row">
             <input
               id="purchaseStartAt"
               type="datetime-local"
               aria-label="購入開始"
               value={form.purchaseStartAt}
               onChange={(e) => updateField("purchaseStartAt", e.target.value)}
-              style={{ flex: 1 }}
             />
             <span className="muted">〜</span>
             <input
@@ -373,7 +368,6 @@ export function LotteryEditPage() {
               aria-label="購入期限"
               value={form.purchaseDeadlineAt}
               onChange={(e) => updateField("purchaseDeadlineAt", e.target.value)}
-              style={{ flex: 1 }}
             />
           </div>
         </div>

@@ -277,3 +277,90 @@ button:disabled {
   margin-bottom: 10px;
   display: block;
 }
+
+.datetime-range-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.datetime-range-row > input {
+  flex: 1;
+}
+
+.source-links-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 16px 12px 48px;
+  }
+
+  .auth-page {
+    margin: 32px auto;
+  }
+
+  h1 {
+    font-size: 19px;
+  }
+
+  .header-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .header-right {
+    align-items: stretch;
+  }
+
+  .nav-links {
+    flex-wrap: wrap;
+  }
+
+  .date-filter-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .date-filter-row input[type="date"] {
+    width: 100%;
+  }
+
+  .datetime-range-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .lottery-row {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    grid-template-areas:
+      "thumb info"
+      "actions actions";
+    align-items: start;
+    gap: 10px 14px;
+  }
+
+  .lottery-thumb {
+    grid-area: thumb;
+  }
+
+  .lottery-info {
+    grid-area: info;
+  }
+
+  .lottery-actions {
+    grid-area: actions;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .lottery-actions button {
+    flex: 1 1 auto;
+  }
+}
