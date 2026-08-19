@@ -2,6 +2,7 @@ import { computeContentHash, type AnalysisInput } from "@x-post/shared";
 import type { RawPost } from "../scraping/x/parseTweetDom.ts";
 import { classifyPost } from "./classifyPost.ts";
 import { classifyPostUrls } from "./classifyUrls.ts";
+import { classifyEntryPurpose } from "./entryPurpose.ts";
 import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries, stripLabelSections } from "./extractLotteryData.ts";
 
 /** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
@@ -49,13 +50,20 @@ function hasMultipleDistinctItems(bodyText: string): boolean {
 
 /**
  * 投稿を解析して AnalysisInput を生成する（scraper 側・100% ルールベース）。
- *  - 明確な非抽選（unrelated/preparation/restock 等）は抽選抽出しない。
+ *  - まず entryPurpose（目的別キーワードゲート）で「lottery解析へ進めるか」を判定する。
+ *    ignored（新規抽選/まとめ/結果発表のいずれのキーワードにも該当しない）は抽出を一切行わない
+ *    （2026-08実データで、classifyPostの広いシグナルだけでは無関係な投稿への誤抽出が多かったため）。
  *  - 単純な1店舗1商品はルール単一抽出（商品/店舗が揃えば success、欠ければ needs_review）。
  *  - 複数店舗・複数商品・複数セクションはルールでは分割できないため needs_review（分割は Phase 3）。
+ *  - result（抽選結果発表）は、既存抽選とマッチしなければ新規lotteryとして確定登録させたくないため、
+ *    抽出後に analysisStatus を強制的に needs_review へ落とす（Worker側 persistAnalysis の
+ *    既存の降格ロジックを利用する。マッチした場合は matchExistingLottery が候補としてルーティング
+ *    するため、この降格の影響を受けず既存抽選への自動反映は起きない）。
  * 日時は常にルール(resolveDate)で確定する。LLM は使用しない。
  */
 export async function analyzePost(post: RawPost): Promise<AnalysisInput> {
   const cls = classifyPost(post.bodyText);
+  const entryPurpose = classifyEntryPurpose(post.bodyText);
   const urls = classifyPostUrls(post.externalLinks, post.imageUrls);
   const inputContentHash = await computeContentHash(post.bodyText);
 
@@ -72,31 +80,39 @@ export async function analyzePost(post: RawPost): Promise<AnalysisInput> {
     errorMessage: null,
   };
 
-  // 明確な非抽選 → 抽選抽出しない
-  if (!cls.isLotteryInformation) {
-    return base;
+  // 目的別キーワードに非該当 → 抽選抽出しない（source_post自体は従来どおり保存される）
+  if (entryPurpose === "ignored") {
+    return { ...base, isLotteryInformation: false };
   }
 
   const single = extractSingleLottery(post.bodyText, post.publishedAt, urls);
   const singleOk = Boolean(single.productNameRaw && single.storeNameRaw);
+
+  let result: AnalysisInput;
 
   // 複雑/曖昧（複数店舗・複数商品）→ ルールで分割を試みる（Phase 3）。
   // 確実に分割でき（各件に商品と店舗が揃う）→ success。
   if (assessComplexity(post.bodyText)) {
     const split = splitLotteries(post.bodyText, post.publishedAt, urls);
     if (split && split.length >= 2 && split.every((l) => l.productNameRaw && l.storeNameRaw)) {
-      return { ...base, extractedLotteries: split, analysisStatus: "success" };
+      result = { ...base, extractedLotteries: split, analysisStatus: "success" };
+    } else if (singleOk && !hasMultipleDistinctItems(post.bodyText)) {
+      // 分割できなかった場合: 実際には複数商品/店舗マーカーが無い（＝「応募期間」「当選発表」を
+      // 両方書いただけの普通の単一抽選投稿）で、単一抽出が成功していればそれをsuccessとして採用する。
+      result = { ...base, extractedLotteries: [single], analysisStatus: "success" };
+    } else {
+      // 実際に複数マーカーが存在するのに分割できなかった場合のみneeds_reviewへ落とす
+      // （一部項目だけを黙って採用してしまうことを避けるため）。
+      result = { ...base, extractedLotteries: [single], analysisStatus: "needs_review" };
     }
-    // 分割できなかった場合: 実際には複数商品/店舗マーカーが無い（＝「応募期間」「当選発表」を
-    // 両方書いただけの普通の単一抽選投稿）で、単一抽出が成功していればそれをsuccessとして採用する。
-    // 実際に複数マーカーが存在するのに分割できなかった場合のみneeds_reviewへ落とす
-    // （一部項目だけを黙って採用してしまうことを避けるため）。
-    if (singleOk && !hasMultipleDistinctItems(post.bodyText)) {
-      return { ...base, extractedLotteries: [single], analysisStatus: "success" };
-    }
-    return { ...base, extractedLotteries: [single], analysisStatus: "needs_review" };
+  } else {
+    // 単純 → ルール単一抽出で確定（商品/店舗が欠ける場合は判定不能として needs_review）
+    result = { ...base, extractedLotteries: [single], analysisStatus: singleOk ? "success" : "needs_review" };
   }
 
-  // 単純 → ルール単一抽出で確定（商品/店舗が欠ける場合は判定不能として needs_review）
-  return { ...base, extractedLotteries: [single], analysisStatus: singleOk ? "success" : "needs_review" };
+  if (entryPurpose === "result" && result.analysisStatus !== "needs_review") {
+    result = { ...result, analysisStatus: "needs_review" };
+  }
+
+  return result;
 }

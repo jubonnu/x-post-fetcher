@@ -74,6 +74,11 @@ export async function persistAnalysis(
     }
     return row;
   });
-  const synced = await syncLotteriesFromAnalysis(db, sourcePostId, candidates);
+  // まとめ投稿（lottery_summary）は「取りこぼした新規抽選の補完」が目的のため、既存と明確に
+  // 同一（matchExistingLotteryのmerge閾値以上）の項目はupdate_candidateすら作らずスキップする。
+  // 毎日のまとめ投稿から新規情報の無い重複update_candidateが大量発生することを防ぐため。
+  const synced = await syncLotteriesFromAnalysis(db, sourcePostId, candidates, {
+    skipOnClearMatch: analysis.postType === "lottery_summary",
+  });
   return { action: "inserted", lotteryCount: synced.count, lotteryResults: synced.results };
 }

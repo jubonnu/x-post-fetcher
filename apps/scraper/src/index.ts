@@ -24,7 +24,7 @@ function printPost(p: RawPost): void {
 async function main(): Promise<void> {
   await mkdir(OUTPUT_DIR, { recursive: true });
 
-  const posts = await fetchTweets({ maxPosts: 14 });
+  const { posts } = await fetchTweets({ maxPosts: 14 });
   console.log(`[fetch] ${posts.length} 件を収集しました。`);
   if (posts.length === 0) {
     console.warn("[warn] 投稿を取得できませんでした。");

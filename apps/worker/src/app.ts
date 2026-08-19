@@ -27,6 +27,7 @@ import { registerMeSyncBootstrap } from "./routes/meSyncBootstrap.ts";
 import { registerE2eSeed } from "./routes/e2eSeed.ts";
 import { registerRevenuecatEventRetry } from "./routes/revenuecatEventRetry.ts";
 import { registerReview } from "./routes/review.ts";
+import { registerSourcePostLookup } from "./routes/sourcePostLookup.ts";
 
 /**
  * Hono アプリを生成する（Workers / Node 両対応）。
@@ -74,6 +75,9 @@ export function createApp(createDb: CreateDb) {
 
   // 内部取込API
   registerIngest(app);
+
+  // 内部照会API（scraperの差分取得が既知externalPostIdと突合するため）
+  registerSourcePostLookup(app);
 
   // 内部ジョブ実行API（Phase 4）
   registerJobs(app);

@@ -112,8 +112,9 @@ export interface LotteryActionResult {
   /** matchAction="candidate" の場合の lottery_update_candidates.id。 */
   candidateId: number | null;
   /** "own_updated"（同一投稿の再抽出で自身のlotteryを更新） / "own_confirmed_skipped"（承認・却下済みのため無視）
-   * / "candidate"（更新候補へUPSERT） / "new"（新規lottery挿入）。 */
-  matchAction: "own_updated" | "own_confirmed_skipped" | "candidate" | "new";
+   * / "candidate"（更新候補へUPSERT） / "skipped_clear_match"（summary投稿限定: 既存と明確に同一のため
+   * candidateすら作らずスキップ） / "new"（新規lottery挿入）。 */
+  matchAction: "own_updated" | "own_confirmed_skipped" | "candidate" | "skipped_clear_match" | "new";
   matchScore: number;
   changedFields: string[];
 }
@@ -124,7 +125,21 @@ export interface SyncLotteriesResult {
   candidates: number;
   ownUpdated: number;
   ownConfirmedSkipped: number;
+  /** skipOnClearMatch指定時、既存と明確に同一のため候補すら作らずスキップした件数。 */
+  skippedClearMatch: number;
   results: LotteryActionResult[];
+}
+
+export interface SyncLotteriesOptions {
+  /**
+   * true の場合、matchExistingLottery が「明確に同一」（score >= mergeThreshold、action="merge"）
+   * と判定した候補は lottery_update_candidate すら作らずスキップする（summary投稿専用、Phase X）。
+   * summary投稿の目的は「取りこぼした新規抽選の補完」であり、既存と明確に同一の再掲をレビュー対象に
+   * する価値は無いため（毎日のまとめ投稿から大量の重複update_candidateが発生することを防ぐ）。
+   * 曖昧一致（action="review"、score 50-79）は従来どおりcandidateにする。
+   * new_lottery/result投稿では未指定（false）＝従来通り全マッチをcandidateにする。
+   */
+  skipOnClearMatch?: boolean;
 }
 
 /** 締切ブロック日数を環境変数から取得（既定は matchExistingLottery 側の 7 日）。 */
@@ -185,9 +200,18 @@ function diffOwnLotteryFields(oldRow: LotteryRow, newRow: ReturnType<typeof toLo
 export async function syncLotteriesFromAnalysis(
   db: Db,
   sourcePostId: number,
-  candidates: ReturnType<typeof toLotteryRow>[]
+  candidates: ReturnType<typeof toLotteryRow>[],
+  options: SyncLotteriesOptions = {}
 ): Promise<SyncLotteriesResult> {
-  const result: SyncLotteriesResult = { count: 0, inserted: 0, candidates: 0, ownUpdated: 0, ownConfirmedSkipped: 0, results: [] };
+  const result: SyncLotteriesResult = {
+    count: 0,
+    inserted: 0,
+    candidates: 0,
+    ownUpdated: 0,
+    ownConfirmedSkipped: 0,
+    skippedClearMatch: 0,
+    results: [],
+  };
   const opts = matchOpts();
 
   const ownLotteries = await db
@@ -266,6 +290,22 @@ export async function syncLotteriesFromAnalysis(
 
     if (m.matchedIndex !== null) {
       const target = existing[m.matchedIndex];
+
+      if (options.skipOnClearMatch && m.action === "merge") {
+        // summary投稿限定: 既存と明確に同一（score >= mergeThreshold）なので、
+        // candidateすら作らずスキップする（新規情報が無いレビュー項目を発生させないため）。
+        result.results.push({
+          lotteryId: target.id,
+          candidateId: null,
+          matchAction: "skipped_clear_match",
+          matchScore: m.score,
+          changedFields: [],
+        });
+        result.skippedClearMatch++;
+        result.count++;
+        continue;
+      }
+
       const upserted = await upsertLotteryUpdateCandidate(db, {
         targetLotteryId: target.id,
         sourcePostId,

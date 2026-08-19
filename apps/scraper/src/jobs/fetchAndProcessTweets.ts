@@ -2,17 +2,60 @@ import { computeContentHash, type IngestPayload, type SourcePostInput } from "@x
 import { fetchTweets } from "../scraping/x/fetchTweets.ts";
 import type { RawPost } from "../scraping/x/parseTweetDom.ts";
 import { analyzePost } from "../lottery/analyzePost.ts";
+import { classifyEntryPurpose, type EntryPurpose } from "../lottery/entryPurpose.ts";
 
 /**
  * バッチ: X を取得 → sourcePost payload を組み立て → Worker の /ingest へ POST。
  * Phase 1 は解析（analysis）を送らず、生投稿のみを登録する。
  *
+ * 取得方式（前回取得済み地点までプロフィールを遡る差分取得）:
+ *   実行開始時に Worker の GET /internal/source-posts/known-external-ids で
+ *   TARGET_USER の既知 externalPostId 一覧を取得し、fetchTweets へ渡す。
+ *   既知IDが1件もなければ（初回起動）従来どおり最新 MAX_POSTS 件を取得する。
+ *
+ *   既知ID照会そのものが失敗した場合（タイムアウト・404・500・レスポンス形式不正等）は、
+ *   初回モードへフォールバックせず本バッチ全体を失敗させる（スクレイプ・ingestを一切行わない）。
+ *   フォールバックすると「短時間に多数投稿された場合の取りこぼし防止」という差分取得の目的自体が
+ *   崩れるため（1時間に15件以上投稿された場合、初回モード=MAX_POSTS件しか見ないと確実に欠落する）。
+ *   失敗時はGitHub Actionsがfailureになり、次回cronで再試行される。
+ *
+ *   走査結果が「既知投稿の境界まで安全に到達し、安全マージンも完了した」と確認できなかった場合
+ *   （安全上限到達／既知境界未確認のままMAX_SCROLLS到達／既知境界未確認のままstall）は
+ *   「走査未完了（needsRecovery）」として扱う。この場合、新規投稿をingestするより前に
+ *   Workerへ needsRecovery=true を確実に保存し、保存に失敗したらingest自体を行わずバッチを
+ *   失敗させる（走査未完了の事実を記録し損ねたまま新規投稿だけが既知化されると、次回が誤って
+ *   通常モードに戻り取りこぼす致命的な経路になるため）。
+ *   保存に成功した場合のみ、続けてingestする。次回実行はリカバリーモード（既知投稿を全件と
+ *   突合し、known-streakの早期停止を抑制する）で実行される。
+ *
+ *   逆に走査完了（stopReasonが"known_streak_boundary_with_margin"）の場合は、ingest成功後に
+ *   needsRecovery=falseへの解除を試みる（ベストエフォート。失敗しても次回もrecoveryモードに
+ *   留まるだけで、取りこぼし方向には倒れないため安全）。
+ *
+ *   安全上限に到達しない・走査完了の実行が1回できるまでこれを繰り返すことで、複数回の実行を
+ *   通じて取りこぼしなく全件回収されることを保証する。
+ *
  * 環境変数:
- *   INGEST_URL   … 例 http://localhost:8787/ingest（デフォルト）
- *   INGEST_TOKEN … Bearer トークン（未設定なら送信せずドライラン）
- *   TARGET_USER  … 取得対象（デフォルト Zabi_pokeka）
- *   MAX_POSTS    … 取得件数（デフォルト 14）
+ *   INGEST_URL          … 例 http://localhost:8787/ingest（デフォルト）
+ *   INGEST_TOKEN        … Bearer トークン（未設定なら送信せずドライラン。ローカル動作確認専用で、
+ *                          この場合のみ既知ID照会自体を行わず初回モード相当で実行する）
+ *   TARGET_USER         … 取得対象（デフォルト Zabi_pokeka）
+ *   MAX_POSTS           … 初回起動時のみ有効な目標件数（デフォルト 14）。差分取得時は無視される
+ *   MAX_NEW_POSTS_PER_RUN … 差分取得時の安全上限（デフォルト 200）
+ *   MAX_SCROLLS         … 最大スクロール回数（デフォルト 60）
+ *   KNOWN_IDS_LOOKBACK  … 既知ID照会時の取得件数上限（デフォルト 200。リカバリーモード中はWorker側で無視され全件返る）
  */
+
+type KnownIdsLookupResult =
+  | { ok: true; externalPostIds: Set<string>; needsRecovery: boolean }
+  | { ok: false; reason: string };
+
+interface IngestCounts {
+  inserted: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+}
 
 async function buildSourcePost(p: RawPost): Promise<SourcePostInput> {
   return {
@@ -33,15 +76,156 @@ async function buildSourcePost(p: RawPost): Promise<SourcePostInput> {
   };
 }
 
-async function main(): Promise<void> {
+/**
+ * Worker の GET /internal/source-posts/known-external-ids から既知 externalPostId 一覧と
+ * リカバリーモード要否（needsRecovery）を取得する。
+ * API障害（timeout/404/500/レスポンス形式不正等）は `{ ok: false }` として明示的に返し、
+ * 呼び出し元でバッチ全体を失敗させる（初回モードへの暗黙フォールバックは行わない）。
+ */
+export async function fetchKnownExternalPostIds(baseUrl: string, token: string, targetUser: string, limit: number): Promise<KnownIdsLookupResult> {
+  const url = new URL("/internal/source-posts/known-external-ids", baseUrl);
+  url.searchParams.set("authorUsername", targetUser);
+  url.searchParams.set("limit", String(limit));
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      return { ok: false, reason: `known-external-ids照会が失敗しました（status=${res.status}）` };
+    }
+    const json = (await res.json()) as { ok?: boolean; externalPostIds?: unknown; needsRecovery?: unknown };
+    if (!json.ok || !Array.isArray(json.externalPostIds)) {
+      return { ok: false, reason: "known-external-idsのレスポンス形式が不正です" };
+    }
+    return {
+      ok: true,
+      externalPostIds: new Set(json.externalPostIds as string[]),
+      needsRecovery: Boolean(json.needsRecovery),
+    };
+  } catch (e) {
+    return { ok: false, reason: `known-external-ids照会でエラーが発生しました: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/**
+ * 今回の走査結果（needsRecovery）をWorkerへ保存する。成功/失敗を呼び出し元へ返す
+ * （failure時にバッチ全体を失敗させるかどうかは呼び出し元の責務で判断する。
+ *  true保存の失敗はバッチ失敗に直結させ、false解除の失敗は警告に留める、という非対称な扱いのため）。
+ */
+async function setNeedsRecovery(baseUrl: string, token: string, targetUser: string, needsRecovery: boolean): Promise<boolean> {
+  const url = new URL("/internal/source-posts/scrape-run-result", baseUrl);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ authorUsername: targetUser, needsRecovery }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+interface IngestOneResult {
+  lotteryResults: { matchAction?: string }[];
+}
+
+/** 1件のsourcePostをWorkerへingestする（解析→送信）。1件の失敗でバッチ全体は止めない。 */
+async function ingestOne(
+  ingestUrl: string,
+  token: string,
+  batchId: string,
+  p: RawPost,
+  counts: IngestCounts
+): Promise<IngestOneResult | null> {
+  let analysis: IngestPayload["analysis"] = null;
+  try {
+    analysis = await analyzePost(p);
+  } catch (e) {
+    console.warn(`[scrape] tweetId=${p.tweetId} 解析失敗（生投稿のみ送信）: ${e instanceof Error ? e.message : e}`);
+  }
+  const payload: IngestPayload = { batchId, sourcePost: await buildSourcePost(p), analysis };
+  try {
+    const res = await fetch(ingestUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify(payload),
+    });
+    interface IngestResponse {
+      ok?: boolean;
+      error?: string;
+      action?: string;
+      sourcePostId?: number;
+      analysis?: { action?: string; lotteryResults?: { matchAction?: string }[] };
+    }
+    const json: IngestResponse = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok) {
+      counts.failed++;
+      console.error(
+        JSON.stringify({ batchId, tweetId: p.tweetId, action: "failed", httpStatus: res.status, error: json.error ?? "unknown" })
+      );
+      return null;
+    }
+    const action = json.action ?? "unknown";
+    counts[action as keyof IngestCounts] = (counts[action as keyof IngestCounts] ?? 0) + 1;
+    console.log(
+      JSON.stringify({
+        batchId,
+        tweetId: p.tweetId,
+        sourcePostId: json.sourcePostId,
+        action: json.action,
+        postType: analysis?.postType ?? null,
+        isLotteryInformation: analysis?.isLotteryInformation ?? null,
+        analysisStatus: analysis?.analysisStatus ?? null,
+        extractedLotteryCount: analysis?.extractedLotteries?.length ?? 0,
+        analysisAction: json.analysis?.action ?? null,
+        lotteryResults: json.analysis?.lotteryResults ?? [],
+      })
+    );
+    return { lotteryResults: json.analysis?.lotteryResults ?? [] };
+  } catch (e) {
+    counts.failed++;
+    console.error(`[scrape] tweetId=${p.tweetId} 送信エラー: ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+}
+
+export async function main(): Promise<void> {
   const batchId = `batch_${Date.now()}`;
   const ingestUrl = process.env.INGEST_URL ?? "http://localhost:8787/ingest";
   const token = process.env.INGEST_TOKEN;
   const targetUser = process.env.TARGET_USER ?? "Zabi_pokeka";
   const maxPosts = Number(process.env.MAX_POSTS ?? 14);
+  const maxNewPostsPerRun = Number(process.env.MAX_NEW_POSTS_PER_RUN ?? 200);
+  const maxScrolls = Number(process.env.MAX_SCROLLS ?? 60);
+  const knownIdsLookback = Number(process.env.KNOWN_IDS_LOOKBACK ?? 200);
 
-  const posts = await fetchTweets({ targetUser, maxPosts });
-  console.log(`[scrape] batchId=${batchId} 取得 ${posts.length} 件`);
+  let knownExternalPostIds = new Set<string>();
+  let recoveryMode = false;
+
+  if (token) {
+    const lookup = await fetchKnownExternalPostIds(ingestUrl, token, targetUser, knownIdsLookback);
+    if (!lookup.ok) {
+      // 初回モードへフォールバックしない: 取りこぼしが増える方向を避けるため、
+      // 既知IDと突合できない状態でのスクレイプ・ingestは一切行わずバッチを失敗させる。
+      throw new Error(`known-external-idsの取得に失敗したため今回のスクレイプを中止しました: ${lookup.reason}`);
+    }
+    knownExternalPostIds = lookup.externalPostIds;
+    recoveryMode = lookup.needsRecovery;
+    console.log(
+      `[scrape] 既知投稿 ${knownExternalPostIds.size} 件と突合します（0件なら初回モード、リカバリーモード=${recoveryMode}）`
+    );
+  }
+  // token未設定（INGEST_TOKENなしのローカル動作確認）の場合のみ、既知ID照会自体を行わず
+  // 初回モード相当（ドライラン）で続行する。本番cronでは必ずtokenが設定されている。
+
+  const { posts, stats } = await fetchTweets({
+    targetUser,
+    maxPosts,
+    knownExternalPostIds,
+    maxNewPostsPerRun,
+    maxScrolls,
+    recoveryMode,
+  });
+  console.log(`[scrape] batchId=${batchId} 取得 ${posts.length} 件 ${JSON.stringify(stats)}`);
 
   if (!token) {
     console.warn("[scrape] INGEST_TOKEN 未設定のためドライラン（送信しません）。");
@@ -52,73 +236,83 @@ async function main(): Promise<void> {
     return;
   }
 
-  const counts: Record<string, number> = { inserted: 0, updated: 0, unchanged: 0, failed: 0 };
-  for (const p of posts) {
-    // 解析（分類＋抽出）。1件の解析失敗でバッチを止めない（sourcePostは必ず送る）
-    let analysis: IngestPayload["analysis"] = null;
-    try {
-      analysis = await analyzePost(p);
-    } catch (e) {
-      console.warn(`[scrape] tweetId=${p.tweetId} 解析失敗（生投稿のみ送信）: ${e instanceof Error ? e.message : e}`);
+  const isDiffMode = knownExternalPostIds.size > 0;
+
+  // 走査未完了なら、新規投稿をingestするより前にWorkerへ needsRecovery=true を確実に保存する。
+  // 保存に失敗した場合はingestを一切行わずバッチを失敗させる（次回cronで再試行）。
+  if (isDiffMode && stats.needsRecovery) {
+    const saved = await setNeedsRecovery(ingestUrl, token, targetUser, true);
+    if (!saved) {
+      throw new Error(
+        "走査未完了（needsRecovery）状態の保存に失敗したため、今回のingestを中止しました。次回cronで今回未反映の新規投稿ごと再試行されます。"
+      );
     }
-    const payload: IngestPayload = { batchId, sourcePost: await buildSourcePost(p), analysis };
-    try {
-      const res = await fetch(ingestUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      interface IngestResponse {
-        ok?: boolean;
-        error?: string;
-        action?: string;
-        sourcePostId?: number;
-        analysis?: { action?: string; lotteryResults?: unknown[] };
+  }
+
+  const counts: IngestCounts = { inserted: 0, updated: 0, unchanged: 0, failed: 0 };
+  const categoryCounts: Record<EntryPurpose, number> = { new_lottery: 0, summary: 0, result: 0, ignored: 0 };
+  const ignoredExternalPostIds: string[] = [];
+  let summaryNewCount = 0;
+  let summarySkippedCount = 0;
+  let resultCandidateCount = 0;
+
+  for (const p of posts) {
+    const entryPurpose = classifyEntryPurpose(p.bodyText);
+    categoryCounts[entryPurpose]++;
+    if (entryPurpose === "ignored") {
+      ignoredExternalPostIds.push(p.tweetId);
+      console.log(JSON.stringify({ event: "skippedByKeywordFilter", tweetId: p.tweetId }));
+    }
+
+    const ingestResult = await ingestOne(ingestUrl, token, batchId, p, counts);
+
+    if (entryPurpose === "summary" && ingestResult) {
+      for (const r of ingestResult.lotteryResults) {
+        if (r.matchAction === "new") summaryNewCount++;
+        else summarySkippedCount++; // candidate/own_updated/own_confirmed_skipped は「既存としてスキップ（候補化含む）」扱い
       }
-      const json: IngestResponse = await res.json().catch(() => ({}));
-      if (!res.ok || !json.ok) {
-        counts.failed++;
-        // 構造化ログ（エラー）
-        console.error(
-          JSON.stringify({
-            batchId,
-            tweetId: p.tweetId,
-            action: "failed",
-            httpStatus: res.status,
-            error: json.error ?? "unknown",
-          })
-        );
-      } else {
-        const action = json.action ?? "unknown";
-        counts[action] = (counts[action] ?? 0) + 1;
-        // 構造化ログ（正常）: rawHtml / cleanedHtml は含まない
-        console.log(
-          JSON.stringify({
-            batchId,
-            tweetId: p.tweetId,
-            sourcePostId: json.sourcePostId,
-            action: json.action,
-            postType: analysis?.postType ?? null,
-            isLotteryInformation: analysis?.isLotteryInformation ?? null,
-            analysisStatus: analysis?.analysisStatus ?? null,
-            extractedLotteryCount: analysis?.extractedLotteries?.length ?? 0,
-            analysisAction: json.analysis?.action ?? null,
-            lotteryResults: json.analysis?.lotteryResults ?? [],
-          })
-        );
+    }
+    if (entryPurpose === "result" && ingestResult) {
+      for (const r of ingestResult.lotteryResults) {
+        if (r.matchAction === "candidate") resultCandidateCount++;
       }
-    } catch (e) {
-      counts.failed++;
-      console.error(`[scrape] tweetId=${p.tweetId} 送信エラー: ${e instanceof Error ? e.message : e}`);
     }
   }
 
   console.log(
+    JSON.stringify({
+      event: "scrape_classification_summary",
+      fetchedCount: posts.length,
+      newLotteryCount: categoryCounts.new_lottery,
+      summaryCount: categoryCounts.summary,
+      resultCount: categoryCounts.result,
+      ignoredCount: categoryCounts.ignored,
+      ignoredExternalPostIds,
+      summaryNewCount,
+      summarySkippedCount,
+      resultCandidateCount,
+    })
+  );
+
+  console.log(
     `[scrape] 完了 inserted=${counts.inserted} updated=${counts.updated} unchanged=${counts.unchanged} failed=${counts.failed}`
   );
+
+  // 走査完了（既知境界まで安全に到達）した場合のみ、ingest成功後にneedsRecoveryの解除を試みる。
+  // 解除に失敗しても次回もrecoveryモードに留まるだけで安全側（取りこぼし方向には倒れない）。
+  if (isDiffMode && !stats.needsRecovery) {
+    const cleared = await setNeedsRecovery(ingestUrl, token, targetUser, false);
+    if (!cleared) {
+      console.warn("[scrape] needsRecovery解除に失敗しました。次回もリカバリーモードで実行されます（安全側のフォールバック）。");
+    }
+  }
 }
 
-main().catch((err) => {
-  console.error("[scrape][error]", err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+// CLI実行時のみ自動実行する（テストからimportした場合に副作用が起きないようにするため）。
+const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
+  main().catch((err) => {
+    console.error("[scrape][error]", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

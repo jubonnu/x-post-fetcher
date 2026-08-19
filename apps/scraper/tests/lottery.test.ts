@@ -299,7 +299,7 @@ describe("classifyPostUrls / analyzePost", () => {
 
   it("行ごとに商品が異なるまとめ投稿は、各行の「」商品名を優先して分割する", async () => {
     const body =
-      "✅ドラスタで「メガドリームex」8/11 23:59〆\n✅ホビステで「トリプレットビート」8/12 23:59〆\n応募期間 当選発表 8/15";
+      "抽選まとめ\n✅ドラスタで「メガドリームex」8/11 23:59〆\n✅ホビステで「トリプレットビート」8/12 23:59〆\n応募期間 当選発表 8/15";
     const analysis = await analyzePost(makePost(body));
     expect(analysis.analysisStatus).toBe("success");
     expect(analysis.extractedLotteries).toHaveLength(2);
@@ -330,7 +330,7 @@ describe("classifyPostUrls / analyzePost", () => {
     // 実店舗を「■札幌店 URL」「■仙台店 URL」...と列挙しているだけなのに、■をトップレベルの
     // 区切りマーカーとして扱うと店舗数だけ誤って分割されてしまっていた（2026-08、修正済み）。
     const body =
-      "【まとめ】\n✅ヤマダ電機 8/12(水)23:59〆\n\n✅ジャンプショップ 8月13日(木)23:59〆\n■札幌店 http://example.com/a\n■仙台店 http://example.com/b\n■東京駅店 http://example.com/c";
+      "【抽選まとめ】\n✅ヤマダ電機 8/12(水)23:59〆\n\n✅ジャンプショップ 8月13日(木)23:59〆\n■札幌店 http://example.com/a\n■仙台店 http://example.com/b\n■東京駅店 http://example.com/c";
     const analysis = await analyzePost(makePost(body));
     expect(analysis.analysisStatus).toBe("success");
     expect(analysis.extractedLotteries).toHaveLength(2);
@@ -396,7 +396,7 @@ describe("analyzePost（ルールベース fixtures）", () => {
   });
 
   it("店舗抽出: 店舗名のみで商品名が取れない → needs_review（判定不能）", async () => {
-    const analysis = await analyzePost(makePost("トイザらスにて抽選\n応募期間 11/10 閉店時間〆"));
+    const analysis = await analyzePost(makePost("トイザらスにて抽選開始\n応募期間 11/10 閉店時間〆"));
     expect(analysis.analysisStatus).toBe("needs_review");
     expect(analysis.extractedLotteries[0].storeNameRaw).toBe("トイザらス");
     expect(analysis.extractedLotteries[0].productNameRaw).toBeNull();

@@ -44,6 +44,39 @@ export type SourcePostRow = typeof sourcePosts.$inferSelect;
 export type SourcePostInsert = typeof sourcePosts.$inferInsert;
 
 /**
+ * scrape_author_states — scraperの差分取得（前回取得済み地点までプロフィールを遡る方式）が
+ * 対象アカウントごとに持つ実行状態。
+ *
+ * `needsRecovery`: 直近の差分取得が「既知投稿の境界まで安全に到達し、安全マージンも完了した」と
+ * 確認できないまま停止した場合に true になる（安全上限到達／既知境界未確認のままMAX_SCROLLS到達／
+ * 既知境界未確認のままstall、のいずれか＝「走査未完了」）。このとき、安全上限に到達した投稿より
+ * 古い位置に未取得の新規投稿が埋もれている可能性があるため、次回実行時は取得済みexternalPostIdの
+ * 直近N件との突合（早いknown-streak検出での早期停止）を使わず、既知投稿を全件通過するまで
+ * スクロールを継続するリカバリーモードに切り替える。
+ *
+ * 走査が既知境界まで安全に完了したことが確認できた実行が1回できた時点でfalseへ戻り（自己修復）、
+ * 通常の高速な差分取得に戻る。false への解除はingest成功後に行う（解除自体に失敗しても
+ * 次回もrecoveryモードになるだけで、取りこぼし方向には倒れない）。
+ * 一方 true への設定は、新規投稿をingestするより前に確実に保存し、保存に失敗した場合は
+ * 今回のingestを行わず実行を失敗させる（走査未完了の事実を記録し損ねたまま新規投稿だけが
+ * 既知化されると、次回runが誤って通常モードに戻り取りこぼす致命的な経路になるため）。
+ *
+ * （例: 前回取得後に250件投稿・MAX_NEW_POSTS_PER_RUN=200の場合、1回目で200件取得・
+ * 安全上限到達 → needsRecovery=trueを保存してから200件をingest。2回目はリカバリーモードで
+ * 残り50件まで到達し取得・既知境界まで安全に到達 → ingest成功後にneedsRecovery=falseへ解除。
+ * 2回の実行を通じて250件全てが欠落なく回収される）。
+ */
+export const scrapeAuthorStates = sqliteTable("scrape_author_states", {
+  authorUsername: text("author_username").primaryKey(),
+  needsRecovery: integer("needs_recovery", { mode: "boolean" }).notNull().default(false),
+  updatedAt: text("updated_at")
+    .notNull()
+    .default(sql`CURRENT_TIMESTAMP`),
+});
+
+export type ScrapeAuthorStateRow = typeof scrapeAuthorStates.$inferSelect;
+
+/**
  * post_analyses — ルールベース解析結果（Phase 2）。LLM は使用しない。
  * 再解析条件は inputContentHash（= source_posts.content_hash）のみで判定する。
  */

@@ -253,6 +253,100 @@ describe("processPageHtmls", () => {
   });
 });
 
+// ---- 差分取得（knownExternalPostIds） ----------------------------------------
+
+describe("processPageHtmls（差分取得）", () => {
+  const TARGET = "zabi_poc";
+
+  function makeArticleHtml(id: string, username: string, datetime: string): string {
+    return `
+<article data-testid="tweet" role="article">
+  <div data-testid="User-Name">
+    <a href="/${username}" role="link"><span>${username}</span></a>
+    <a href="/${username}/status/${id}">
+      <time datetime="${datetime}">${datetime}</time>
+    </a>
+  </div>
+  <div data-testid="tweetText" lang="ja" dir="auto"><span>投稿 ${id}</span></div>
+</article>`;
+  }
+
+  it("既知IDは collected に追加されず known がカウントされる", () => {
+    const collected = new Map<string, RawPost>();
+    const known = new Set(["5001"]);
+    const r = processPageHtmls([makeArticleHtml("5001", TARGET, "2026-08-19T12:00:00.000Z")], TARGET, collected, {
+      knownExternalPostIds: known,
+    });
+    expect(r.added).toBe(0);
+    expect(r.known).toBe(1);
+    expect(collected.size).toBe(0);
+  });
+
+  it("未知IDは新規として collected に追加される", () => {
+    const collected = new Map<string, RawPost>();
+    const known = new Set(["9999"]);
+    const r = processPageHtmls([makeArticleHtml("5002", TARGET, "2026-08-19T12:00:00.000Z")], TARGET, collected, {
+      knownExternalPostIds: known,
+    });
+    expect(r.added).toBe(1);
+    expect(r.known).toBe(0);
+    expect(collected.size).toBe(1);
+  });
+
+  it("連続既知でstreakが増加し、新規投稿でリセットされる", () => {
+    const collected = new Map<string, RawPost>();
+    const known = new Set(["6001", "6002", "6004"]);
+    const htmls = [
+      makeArticleHtml("6001", TARGET, "2026-08-19T12:00:00.000Z"), // known → streak 1
+      makeArticleHtml("6002", TARGET, "2026-08-19T11:00:00.000Z"), // known → streak 2
+      makeArticleHtml("6003", TARGET, "2026-08-19T10:00:00.000Z"), // new → streak reset 0
+      makeArticleHtml("6004", TARGET, "2026-08-19T09:00:00.000Z"), // known → streak 1
+    ];
+    const r = processPageHtmls(htmls, TARGET, collected, { knownExternalPostIds: known });
+    expect(r.known).toBe(3);
+    expect(r.added).toBe(1);
+    expect(collected.has("6003")).toBe(true);
+    expect(r.consecutiveKnownStreak).toBe(1);
+  });
+
+  it("consecutiveKnownStreak はコール間で引き継がれる", () => {
+    const collected = new Map<string, RawPost>();
+    const known = new Set(["7001", "7002", "7003"]);
+    const r1 = processPageHtmls([makeArticleHtml("7001", TARGET, "2026-08-19T12:00:00.000Z")], TARGET, collected, {
+      knownExternalPostIds: known,
+    });
+    expect(r1.consecutiveKnownStreak).toBe(1);
+
+    const r2 = processPageHtmls([makeArticleHtml("7002", TARGET, "2026-08-19T11:00:00.000Z")], TARGET, collected, {
+      knownExternalPostIds: known,
+      consecutiveKnownStreak: r1.consecutiveKnownStreak,
+    });
+    expect(r2.consecutiveKnownStreak).toBe(2);
+  });
+
+  it("seenArticleIds により同じ記事の再走査は二重カウントしない", () => {
+    const collected = new Map<string, RawPost>();
+    const seen = new Set<string>();
+    const html = makeArticleHtml("8001", TARGET, "2026-08-19T12:00:00.000Z");
+
+    const r1 = processPageHtmls([html], TARGET, collected, { seenArticleIds: seen });
+    expect(r1.added).toBe(1);
+
+    // 2回目のスクロールで同じ記事が再度DOMに含まれていても加算されない
+    const r2 = processPageHtmls([html], TARGET, collected, { seenArticleIds: seen });
+    expect(r2.added).toBe(0);
+    expect(collected.size).toBe(1);
+  });
+
+  it("knownExternalPostIds 未指定時は従来どおり全件新規扱い（後方互換）", () => {
+    const collected = new Map<string, RawPost>();
+    const r = processPageHtmls([makeArticleHtml("5003", TARGET, "2026-08-19T12:00:00.000Z")], TARGET, collected);
+    expect(r.added).toBe(1);
+    expect(r.known).toBe(0);
+    expect(r.consecutiveKnownStreak).toBe(0);
+  });
+});
+
 // ---- 展開済みURL ------------------------------------------------------------
 
 describe("expanded URL 抽出", () => {
