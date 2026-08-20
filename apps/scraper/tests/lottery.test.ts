@@ -430,3 +430,88 @@ describe("analyzePost（ルールベース fixtures）", () => {
     expect(analysis.resolvedModelId).toBeUndefined();
   });
 });
+
+/**
+ * applicationUrl決定の優先順位（2026-08）。
+ * 旧仕様は classifyUrl() の allowlist（livepocket 等の主要抽選代行プラットフォーム）に
+ * 完全一致しない限り常に null になっており、店舗が自社ドメインで応募ページを持つケース
+ * （例: 駿河屋のブログ形式の応募ページ）でURLが本文に存在するのに消えてしまっていた
+ * （2026-08、sourcePostId=250の実データで確認）。
+ */
+describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
+  it("1. allowlist一致（livepocket）→ application", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/live1", text: "livepocket.jp/e/abc" }];
+    const post = makePost("ドラスタで「x」抽選開始されました\n応募はこちら\nhttps://livepocket.jp/e/abc", links);
+    const analysis = await analyzePost(post);
+    expect(analysis.extractedLotteries[0].applicationUrl).toBe("https://t.co/live1");
+    expect(analysis.analysisStatus).toBe("success");
+  });
+
+  it("2. 店舗公式ドメイン対応表に一致（駿河屋→suruga-ya.jp）、URL1件 → applicationUrl設定", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/suru1", text: "suruga-ya.jp/blog/?q=xxx" }];
+    const post = makePost(
+      "駿河屋通販で拡張パック「30th CELEBRATION」の抽選開始されました\n応募はこちら⬇️\nhttps://suruga-ya.jp/blog/?q=xxx",
+      links
+    );
+    const analysis = await analyzePost(post);
+    expect(analysis.extractedLotteries[0].applicationUrl).toBe("https://t.co/suru1");
+    expect(analysis.analysisStatus).toBe("success");
+  });
+
+  it("3. allowlist外の店舗公式ドメインでも、応募関連文言に近接していればapplication扱い", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/hobby1", text: "hobbystation.co.jp/lottery/123" }];
+    const post = makePost(
+      "ホビーステーションで「テスト商品」抽選開始されました\nエントリーはこちらから\nhttps://hobbystation.co.jp/lottery/123",
+      links
+    );
+    const analysis = await analyzePost(post);
+    expect(analysis.extractedLotteries[0].applicationUrl).toBe("https://t.co/hobby1");
+    expect(analysis.analysisStatus).toBe("success");
+  });
+
+  it("4. allowlist外・文言近接なし・店舗対応表にも無いが、URLが1件だけ → フォールバックでapplication採用", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/shop1", text: "example-shop.jp/info" }];
+    const post = makePost("テスト商店で「テスト商品」抽選開始されました\n詳細はこちら\nhttps://example-shop.jp/info", links);
+    const analysis = await analyzePost(post);
+    expect(analysis.extractedLotteries[0].applicationUrl).toBe("https://t.co/shop1");
+    expect(analysis.analysisStatus).toBe("success");
+  });
+
+  it("5. allowlist外URLが複数件で判別不能 → applicationUrlは確定させず、urlsは全件保持したままneeds_review", async () => {
+    const links: ExternalLink[] = [
+      { href: "https://t.co/a1", text: "shop-a.jp/page" },
+      { href: "https://t.co/a2", text: "shop-b.jp/page" },
+    ];
+    const post = makePost("テスト商店で「テスト商品」抽選開始されました\n詳細はこちら\nshop-a.jp/page\nshop-b.jp/page", links);
+    const analysis = await analyzePost(post);
+    expect(analysis.extractedLotteries[0].applicationUrl).toBeNull();
+    expect(analysis.analysisStatus).toBe("needs_review");
+    // URL自体は失われず両方 urls 配列に残っている
+    expect(analysis.urls.map((u) => u.originalUrl).sort()).toEqual(["https://t.co/a1", "https://t.co/a2"]);
+  });
+
+  it("6. 同一投稿を再解析してもapplicationUrlの重複・消失がない（決定的・冪等）", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/suru1", text: "suruga-ya.jp/blog/?q=xxx" }];
+    const post = makePost(
+      "駿河屋通販で拡張パック「30th CELEBRATION」の抽選開始されました\n応募はこちら⬇️\nhttps://suruga-ya.jp/blog/?q=xxx",
+      links
+    );
+    const first = await analyzePost(post);
+    const second = await analyzePost(post);
+    expect(second.extractedLotteries[0].applicationUrl).toBe(first.extractedLotteries[0].applicationUrl);
+    expect(second.extractedLotteries[0].applicationUrl).toBe("https://t.co/suru1");
+    expect(second.urls).toEqual(first.urls);
+    expect(second.analysisStatus).toBe(first.analysisStatus);
+  });
+
+  it("回帰確認: sourcePostId 250（駿河屋、production実データ）相当のケースでapplicationUrlがnullでなくなる", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/wovxq8aCHk", text: "suruga-ya.jp/blog/?q=pokeka_chusen260820.html…" }];
+    const post = makePost(
+      "駿河屋通販で拡張パック「30th CELEBRATION」の抽選開始されました‼️\n\n【応募期間】\n9月6日(日)23時59分〆\n\n【当選発表】\n9月7日(月)\n\n応募はこちら⬇️\nhttps://suruga-ya.jp/blog/?q=pokeka_chusen260820.html…",
+      links
+    );
+    const analysis = await analyzePost(post);
+    expect(analysis.extractedLotteries[0].applicationUrl).not.toBeNull();
+    expect(analysis.extractedLotteries[0].applicationUrl).toBe("https://t.co/wovxq8aCHk");
+  });
+});

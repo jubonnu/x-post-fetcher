@@ -3,7 +3,7 @@ import type { RawPost } from "../scraping/x/parseTweetDom.ts";
 import { classifyPost } from "./classifyPost.ts";
 import { classifyPostUrls } from "./classifyUrls.ts";
 import { classifyEntryPurpose } from "./entryPurpose.ts";
-import { extractSingleLottery, LIST_MARKER_PATTERN, splitLotteries, stripLabelSections } from "./extractLotteryData.ts";
+import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, splitLotteries, stripLabelSections } from "./extractLotteryData.ts";
 
 /** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
 export const PARSER_VERSION = "phase3-rules-5";
@@ -111,6 +111,12 @@ export async function analyzePost(post: RawPost): Promise<AnalysisInput> {
   }
 
   if (entryPurpose === "result" && result.analysisStatus !== "needs_review") {
+    result = { ...result, analysisStatus: "needs_review" };
+  }
+
+  // 応募URL候補が複数あり機械的に判別できなかった場合、URL自体（urls配列）は保持したまま
+  // needs_reviewへ落とす（applicationUrlを誤って確定させないため。2026-08）。
+  if (resolveApplicationUrl(urls, post.bodyText ?? "").needsReview && result.analysisStatus !== "needs_review") {
     result = { ...result, analysisStatus: "needs_review" };
   }
 

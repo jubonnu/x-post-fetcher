@@ -175,6 +175,94 @@ function extractStoreName(body: string): string | null {
   return m ? m[1] : null;
 }
 
+/** 応募URLの近くに書かれがちな案内文言（優先度2: 文言近接によるURL採用）。 */
+const APPLICATION_PROXIMITY_KEYWORDS = ["応募はこちら", "抽選受付", "応募ページ", "エントリー", "申し込み", "申込み", "申込"];
+
+/**
+ * 店舗名 → 公式ドメインの対応表（優先度3: allowlist外でも店舗公式ドメインなら採用）。
+ * 誤爆を避けるため、店舗名に別名が部分一致した場合のみ対応ドメインを候補にする
+ * （店舗名が無い/一致しない投稿には一切影響しない）。
+ */
+const STORE_OFFICIAL_DOMAINS: { aliases: string[]; domain: string }[] = [{ aliases: ["駿河屋"], domain: "suruga-ya.jp" }];
+
+/** 明らかに応募URLではない（SNS等の）ドメイン。優先度3/4のフォールバック候補から除外する。 */
+const IRRELEVANT_DOMAIN_SUFFIXES = ["instagram.com", "youtube.com", "youtu.be", "tiktok.com", "facebook.com", "threads.net"];
+
+function isIrrelevantDomain(domain: string): boolean {
+  return IRRELEVANT_DOMAIN_SUFFIXES.some((d) => domain === d || domain.endsWith(`.${d}`));
+}
+
+/**
+ * 「未分類（urlType: unknown）」のURLのうち、応募URL候補として扱ってよいものだけを返す。
+ * 既に app_download/image/x_post 等、他の種別に確定分類されているURLは対象外
+ * （二重に応募URL扱いしてしまうと、例えばApp StoreリンクのみのケースでapplicationUrlに
+ * 誤ってセットされてしまう。2026-08、実データ検証で確認）。
+ */
+function unknownUrlCandidates(urls: ClassifiedUrl[]): ClassifiedUrl[] {
+  return urls.filter((u) => u.urlType === "unknown" && u.domain && !isIrrelevantDomain(u.domain));
+}
+
+/** キーワード行またはその直後1〜2行に、候補URLのドメインが登場するか探す。 */
+function findUrlNearKeywords(candidates: ClassifiedUrl[], body: string, keywords: string[]): ClassifiedUrl | null {
+  if (candidates.length === 0) return null;
+  const lines = body.split(/\n+/);
+  for (let i = 0; i < lines.length; i++) {
+    if (!keywords.some((k) => lines[i].includes(k))) continue;
+    for (let offset = 0; offset <= 2; offset++) {
+      const line = lines[i + offset];
+      if (line === undefined) continue;
+      const match = candidates.find((u) => u.domain && line.includes(u.domain));
+      if (match) return match;
+    }
+  }
+  return null;
+}
+
+/** 店舗名が公式ドメイン対応表に一致するURLを探す。 */
+function findUrlByStoreDomain(candidates: ClassifiedUrl[], storeNameRaw: string | null): ClassifiedUrl | null {
+  if (!storeNameRaw) return null;
+  const entry = STORE_OFFICIAL_DOMAINS.find((e) => e.aliases.some((alias) => storeNameRaw.includes(alias)));
+  if (!entry) return null;
+  return candidates.find((u) => u.domain === entry.domain) ?? null;
+}
+
+export interface ApplicationUrlResolution {
+  applicationUrl: string | null;
+  /** 複数のURL候補があり、どれが応募URLか機械的に判別できなかった場合true（呼び出し元はneeds_reviewへ）。 */
+  needsReview: boolean;
+}
+
+/**
+ * 応募URL（applicationUrl）を、以下の優先順位で決定する（2026-08）。
+ * 従来は classifyUrl() の allowlist（livepocket 等の主要抽選代行プラットフォーム）に
+ * 完全一致しない限り常に null になっており、店舗が自社ドメインで応募ページを持つケース
+ * （例: 駿河屋のブログ形式の応募ページ）でURLが消えてしまっていた。
+ *
+ *  1. allowlist（classifyUrl側で urlType:"application" と確定判定済み）→ 最優先
+ *  2. 「応募はこちら」等の案内文言に近接するURL
+ *  3. 店舗名から公式ドメインが一意に特定できるURL（STORE_OFFICIAL_DOMAINS）
+ *  4. 上記に該当しないが、有効なURLが投稿内に1件だけ（画像/自己ツイート/SNS等を除く）→ フォールバック採用
+ *  5. 複数件あり判別できない → applicationUrlは確定させず、呼び出し元でneeds_reviewにする
+ *     （URL自体は失わない。extractedLotteries.urls経由で全件保持されたまま）
+ */
+export function resolveApplicationUrl(urls: ClassifiedUrl[], body: string): ApplicationUrlResolution {
+  const allowlisted = firstUrlOfType(urls, "application");
+  if (allowlisted) return { applicationUrl: allowlisted, needsReview: false };
+
+  const candidates = unknownUrlCandidates(urls);
+
+  const nearKeyword = findUrlNearKeywords(candidates, body, APPLICATION_PROXIMITY_KEYWORDS);
+  if (nearKeyword) return { applicationUrl: nearKeyword.originalUrl, needsReview: false };
+
+  const byStoreDomain = findUrlByStoreDomain(candidates, extractStoreName(body));
+  if (byStoreDomain) return { applicationUrl: byStoreDomain.originalUrl, needsReview: false };
+
+  if (candidates.length === 1) return { applicationUrl: candidates[0].originalUrl, needsReview: false };
+  if (candidates.length >= 2) return { applicationUrl: null, needsReview: true };
+
+  return { applicationUrl: null, needsReview: false };
+}
+
 /** 商品名（最初の「」内） */
 function extractProductName(body: string): string | null {
   const m = body.match(/[「『]([^」』]{1,60})[」』]/);
@@ -225,7 +313,7 @@ export function extractSingleLottery(
   const startedNow = /抽選開始されました|抽選開始しました|抽選が開始|受付開始しました/.test(body);
   const confirmedOpenAt = startedNow && applicationStart.precision === "unknown" ? postPublishedAt : null;
 
-  const applicationUrl = firstUrlOfType(urls, "application");
+  const applicationUrl = resolveApplicationUrl(urls, body).applicationUrl;
   const officialInformationUrl = firstUrlOfType(urls, "official_information");
   const appDownloadUrl = firstUrlOfType(urls, "app_download");
 
@@ -285,7 +373,7 @@ export function splitLotteries(
   const resultAnnouncementRange = fieldDateRange(body, ["当選発表", "当選者発表", "抽選結果"], postPublishedAt);
   const resultAnnouncement = resultAnnouncementRange.end;
   const resultAnnouncementStart = resultAnnouncementRange.start ?? emptyResolved();
-  const applicationUrl = firstUrlOfType(urls, "application");
+  const applicationUrl = resolveApplicationUrl(urls, body).applicationUrl;
   const officialInformationUrl = firstUrlOfType(urls, "official_information");
   const appDownloadUrl = firstUrlOfType(urls, "app_download");
 
