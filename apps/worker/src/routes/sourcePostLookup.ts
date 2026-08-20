@@ -41,7 +41,13 @@ export function registerSourcePostLookup(app: Hono<AppEnv>): void {
     const state = await getScrapeAuthorState(db, authorUsername);
     const externalPostIds = await findRecentExternalPostIdsByAuthor(db, authorUsername, state.needsRecovery ? undefined : limit);
 
-    return c.json({ ok: true, externalPostIds, needsRecovery: state.needsRecovery });
+    return c.json({
+      ok: true,
+      externalPostIds,
+      needsRecovery: state.needsRecovery,
+      recoveryCursorExternalPostId: state.recoveryCursorExternalPostId,
+      recoveryCursorPublishedAt: state.recoveryCursorPublishedAt,
+    });
   });
 
   /**
@@ -67,13 +73,33 @@ export function registerSourcePostLookup(app: Hono<AppEnv>): void {
     } catch {
       return c.json({ ok: false, error: "invalid_json" }, 400);
     }
-    const { authorUsername, needsRecovery } = (body ?? {}) as { authorUsername?: unknown; needsRecovery?: unknown };
+    const {
+      authorUsername,
+      needsRecovery,
+      recoveryCursorExternalPostId,
+      recoveryCursorPublishedAt,
+    } = (body ?? {}) as {
+      authorUsername?: unknown;
+      needsRecovery?: unknown;
+      recoveryCursorExternalPostId?: unknown;
+      recoveryCursorPublishedAt?: unknown;
+    };
     if (typeof authorUsername !== "string" || !authorUsername || typeof needsRecovery !== "boolean") {
       return c.json({ ok: false, error: "authorUsername (string) and needsRecovery (boolean) are required" }, 400);
     }
+    if (recoveryCursorExternalPostId !== undefined && recoveryCursorExternalPostId !== null && typeof recoveryCursorExternalPostId !== "string") {
+      return c.json({ ok: false, error: "recoveryCursorExternalPostId must be a string or null" }, 400);
+    }
+    if (recoveryCursorPublishedAt !== undefined && recoveryCursorPublishedAt !== null && typeof recoveryCursorPublishedAt !== "string") {
+      return c.json({ ok: false, error: "recoveryCursorPublishedAt must be a string or null" }, 400);
+    }
 
     const db = c.get("db");
-    await setScrapeAuthorState(db, authorUsername, needsRecovery);
+    await setScrapeAuthorState(db, authorUsername, {
+      needsRecovery,
+      recoveryCursorExternalPostId: recoveryCursorExternalPostId as string | null | undefined,
+      recoveryCursorPublishedAt: recoveryCursorPublishedAt as string | null | undefined,
+    });
 
     return c.json({ ok: true });
   });

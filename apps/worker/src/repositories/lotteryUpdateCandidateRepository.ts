@@ -44,23 +44,35 @@ export interface UpsertLotteryUpdateCandidateResult {
  *   targetLotteryId変化に追従する）。
  * - 既存でstatus!=pending（applied/registered_as_new/ignored=解決済み）→ 一切変更しない
  *   （解決済みの候補を再解析で復活させない、という明示要件）。
+ *
+ * `existingByKey`を渡した場合、`(sourcePostId, candidateKey)`一致行のSELECTを省略し、
+ * その場でMapから引く（呼び出し元が同一sourcePostId分をループ開始前に1回だけ取得している前提。
+ * summary投稿のように候補が数十件に及ぶ場合、候補ごとにSELECTするとCloudflare Workersの
+ * subrequest上限に到達するため。2026-08、staging実データで実際に発生した障害の再発防止）。
+ * 省略した場合は従来どおりDBへ都度問い合わせる。
  */
 export async function upsertLotteryUpdateCandidate(
-  db: Db,
-  input: UpsertLotteryUpdateCandidateInput
+  db: DbOrTx,
+  input: UpsertLotteryUpdateCandidateInput,
+  existingByKey?: ReadonlyMap<string, LotteryUpdateCandidateRow>
 ): Promise<UpsertLotteryUpdateCandidateResult> {
   const candidateKey = input.candidateKey;
 
-  const existingRows = await db
-    .select()
-    .from(lotteryUpdateCandidates)
-    .where(
-      and(
-        eq(lotteryUpdateCandidates.sourcePostId, input.sourcePostId),
-        eq(lotteryUpdateCandidates.candidateKey, candidateKey)
-      )
-    );
-  const existing = existingRows[0];
+  let existing: LotteryUpdateCandidateRow | undefined;
+  if (existingByKey) {
+    existing = existingByKey.get(candidateKey);
+  } else {
+    const existingRows = await db
+      .select()
+      .from(lotteryUpdateCandidates)
+      .where(
+        and(
+          eq(lotteryUpdateCandidates.sourcePostId, input.sourcePostId),
+          eq(lotteryUpdateCandidates.candidateKey, candidateKey)
+        )
+      );
+    existing = existingRows[0];
+  }
 
   if (existing) {
     if (existing.status !== "pending") {

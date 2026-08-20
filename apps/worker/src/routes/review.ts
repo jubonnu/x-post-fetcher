@@ -5,6 +5,7 @@ import { lotteries } from "../db/schema.ts";
 import { getLotteryWithDetails, listLotteriesByOffset } from "../repositories/lotteryRepository.ts";
 import { enqueueJob } from "../repositories/processingJobRepository.ts";
 import { sourcePosts } from "../db/schema.ts";
+import { setSourcePostArchived } from "../repositories/sourcePostRepository.ts";
 
 /**
  * 内部管理 API（Bearer 認証必須）。
@@ -12,7 +13,9 @@ import { sourcePosts } from "../db/schema.ts";
  * GET  /internal/review-items/:id          — 詳細（sources + fieldHistory 付き）
  * POST /internal/review-items/:id/approve  — 承認（verificationStatus=approved）
  * POST /internal/review-items/:id/reject   — 却下（verificationStatus=rejected）
- * POST /internal/source-posts/:id/reanalyze — 再解析ジョブをエンキュー
+ * POST /internal/source-posts/:id/reanalyze — 再解析ジョブをエンキュー（アーカイブ済みは409）
+ * POST /internal/source-posts/:id/archive   — アーカイブ（物理削除せず解析対象外にする）
+ * POST /internal/source-posts/:id/unarchive — アーカイブ解除（再解析可能に戻す）
  */
 export function registerReview(app: Hono<AppEnv>): void {
   // Bearer 認証ミドルウェア（/internal/* に適用）
@@ -112,10 +115,34 @@ export function registerReview(app: Hono<AppEnv>): void {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: "invalid_id" }, 400);
 
-    const rows = await db.select({ id: sourcePosts.id }).from(sourcePosts).where(eq(sourcePosts.id, id));
+    const rows = await db
+      .select({ id: sourcePosts.id, archivedAt: sourcePosts.archivedAt })
+      .from(sourcePosts)
+      .where(eq(sourcePosts.id, id));
     if (rows.length === 0) return c.json({ ok: false, error: "not_found" }, 404);
+    if (rows[0].archivedAt) return c.json({ ok: false, error: "archived" }, 409);
 
     const { enqueued } = await enqueueJob(db, "analyze_post", { sourcePostId: id });
     return c.json({ ok: true, sourcePostId: id, enqueued });
+  });
+
+  app.post("/internal/source-posts/:id/archive", async (c) => {
+    const db = c.get("db");
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: "invalid_id" }, 400);
+
+    const result = await setSourcePostArchived(db, id, true);
+    if (!result) return c.json({ ok: false, error: "not_found" }, 404);
+    return c.json({ ok: true, sourcePostId: result.id, archivedAt: result.archivedAt });
+  });
+
+  app.post("/internal/source-posts/:id/unarchive", async (c) => {
+    const db = c.get("db");
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ ok: false, error: "invalid_id" }, 400);
+
+    const result = await setSourcePostArchived(db, id, false);
+    if (!result) return c.json({ ok: false, error: "not_found" }, 404);
+    return c.json({ ok: true, sourcePostId: result.id, archivedAt: result.archivedAt });
   });
 }

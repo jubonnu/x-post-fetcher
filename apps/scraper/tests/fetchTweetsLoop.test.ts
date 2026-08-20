@@ -11,9 +11,7 @@ const BASE: LoopIterationInput = {
   noGrowth: 0,
   maxNewPostsPerRun: 200,
   initialTargetCount: 14,
-  requireFullKnownMatch: false,
-  matchedKnownCount: 0,
-  totalKnownIds: 0,
+  cursorReached: true,
 };
 
 describe("decideLoopIteration", () => {
@@ -114,6 +112,46 @@ describe("decideLoopIteration", () => {
       expect(r3.stop).toBe(true);
       expect(r3.stopReason).toBe("known_streak_boundary_with_margin");
       expect(r3.hitSafetyCap).toBe(false);
+    });
+  });
+
+  describe("recovery cursor未到達（cursorReached=false）", () => {
+    it("streakが閾値(4)を超えていても境界検出しない（cursor未到達のため）", () => {
+      const d = decideLoopIteration({ ...BASE, isDiffMode: true, consecutiveKnownStreak: 10, totalValidSeenAfter: 10, cursorReached: false });
+      expect(d.stop).toBe(false);
+      expect(d.boundaryExtraScrollsRemaining).toBeNull();
+    });
+
+    it("cursorReachedがtrueに切り替わった以降のイテレーションから境界検出が有効になる", () => {
+      // cursor未到達の間はstreakが伸びても無視される
+      const d1 = decideLoopIteration({ ...BASE, isDiffMode: true, consecutiveKnownStreak: 5, totalValidSeenAfter: 5, cursorReached: false });
+      expect(d1.boundaryExtraScrollsRemaining).toBeNull();
+
+      // cursorに到達した回から通常どおり境界検出が始まる
+      const d2 = decideLoopIteration({
+        ...BASE,
+        isDiffMode: true,
+        consecutiveKnownStreak: 4,
+        boundaryExtraScrollsRemaining: d1.boundaryExtraScrollsRemaining,
+        totalValidSeenBefore: 5,
+        totalValidSeenAfter: 9,
+        cursorReached: true,
+      });
+      expect(d2.boundaryExtraScrollsRemaining).toBe(2);
+    });
+
+    it("安全上限は cursorReached に関係なく優先される", () => {
+      const d = decideLoopIteration({
+        ...BASE,
+        isDiffMode: true,
+        collectedSize: 200,
+        totalValidSeenAfter: 200,
+        maxNewPostsPerRun: 200,
+        cursorReached: false,
+      });
+      expect(d.stop).toBe(true);
+      expect(d.stopReason).toBe("max_new_posts_per_run_reached");
+      expect(d.hitSafetyCap).toBe(true);
     });
   });
 

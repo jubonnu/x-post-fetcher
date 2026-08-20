@@ -6,10 +6,12 @@ import {
   lotteries,
   lotteryFieldHistory,
   lotterySources,
+  lotteryUpdateCandidates,
   sourcePosts,
   type LotteryRow,
   type LotterySourceRow,
   type LotteryFieldHistoryRow,
+  type LotteryUpdateCandidateRow,
 } from "../db/schema.ts";
 import { encodeLotteryListCursor, type LotteryListCursor } from "../services/lotteryListCursor.ts";
 import {
@@ -18,7 +20,7 @@ import {
   normalizeStoreBranch,
   normalizeStoreName,
 } from "../services/normalize.ts";
-import { matchExistingLottery, type MatchOptions } from "../services/matchExistingLottery.ts";
+import { matchExistingLottery, type MatchableLottery, type MatchOptions } from "../services/matchExistingLottery.ts";
 import { mergeLotteryData, type FieldChange } from "../services/mergeLotteryData.ts";
 import { buildLotteryUpdateCandidateKey, disambiguateCandidateKey } from "../services/lotteryUpdateCandidateKey.ts";
 import { upsertLotteryUpdateCandidate } from "./lotteryUpdateCandidateRepository.ts";
@@ -198,7 +200,7 @@ function diffOwnLotteryFields(oldRow: LotteryRow, newRow: ReturnType<typeof toLo
  *  3. **new**: 上記どちらにも該当しない（有力な既存候補なし）→ 新規`lotteries`挿入（従来通り）。
  */
 export async function syncLotteriesFromAnalysis(
-  db: Db,
+  db: DbOrTx,
   sourcePostId: number,
   candidates: ReturnType<typeof toLotteryRow>[],
   options: SyncLotteriesOptions = {}
@@ -218,6 +220,28 @@ export async function syncLotteriesFromAnalysis(
     .select()
     .from(lotteries)
     .where(and(eq(lotteries.sourcePostId, sourcePostId), eq(lotteries.lifecycleStatus, "active")));
+
+  // マッチング対象の既存lottery一覧は、候補ごとに再取得せずループの外で1回だけ取得する
+  // （43件規模のsummary投稿で候補数×DB往復が発生し、Cloudflare Workersのsubrequest上限に
+  // 到達して処理が途中で失敗する事故が実際に発生したため。2026-08、staging実データで確認）。
+  // ループ内で新規lotteryを挿入した場合は、この配列へ都度追加する（同一投稿内に同一商品・
+  // 店舗が複数回現れた場合、後続の候補が先行候補の新規挿入分と正しくマッチできるようにするため）。
+  const existing: (MatchableLottery & { id: number })[] = await db
+    .select()
+    .from(lotteries)
+    .where(eq(lotteries.lifecycleStatus, "active"));
+
+  // lottery_update_candidatesも同じ理由で候補ごとに再取得しない。この投稿（sourcePostId）に
+  // 既に紐づく候補行をループの外で1回だけ取得し、candidateKeyでMap化して
+  // upsertLotteryUpdateCandidateへ渡す（内部のSELECTを省略させる）。
+  const existingCandidateRows = await db
+    .select()
+    .from(lotteryUpdateCandidates)
+    .where(eq(lotteryUpdateCandidates.sourcePostId, sourcePostId));
+  const existingCandidatesByKey = new Map<string, LotteryUpdateCandidateRow>(
+    existingCandidateRows.map((r) => [r.candidateKey, r])
+  );
+
   // ベースキー（商品名・店舗名のみ）でグルーピングする。同じ投稿がかつて同一の商品名・店舗名を
   // 持つ複数のlotteryを直接作っていた場合（本来は稀だが、下記の候補側と同じ理由で起こりうる）に
   // 備え、1件だけでなく配列で保持し、候補側の出現回数（occurrence）で対応させる。
@@ -236,6 +260,35 @@ export async function syncLotteriesFromAnalysis(
   // （`services/lotteryUpdateCandidateKey.ts`の`disambiguateCandidateKey`参照）。
   // ベースキーごとの出現回数を数え、1回目はそのまま・2回目以降はキーを一意化する。
   const keyOccurrence = new Map<string, number>();
+
+  // 新規候補（lottery_update_candidatesに未存在＝INSERT）・新規lottery（"new"判定）は
+  // 候補ごとに個別INSERTせず、ループ終了後にまとめてbulk INSERTで書き込む（subrequest削減。
+  // 2026-08、staging実データで43件中25件が"new"・18件が"candidate"となる投稿が
+  // Cloudflare Workersのsubrequest上限に到達して失敗する事故が発生した。
+  // 既存候補の更新（再解析等のレアケース）は従来どおり個別UPDATEのまま）。
+  //
+  // "new"判定のlotteryはこの時点でIDが確定しない（bulk INSERTはループ後）。しかし同一投稿内で
+  // 後続の候補が「直前に"new"判定されたばかりのlottery」とマッチする実例が実データで確認できた
+  // （例: 1件目が新商品として新規lottery化された直後、2件目以降の類似投稿がそれに一致する）ため、
+  // 負の仮IDを振って`existing`配列へ即座に追加し、in-memoryマッチングだけは継続する。
+  // bulk INSERT完了後、実IDへ一括で置き換える（tempIdToRealId）。
+  let nextTempLotteryId = -1;
+  const pendingNewLotteries: {
+    resultIndex: number;
+    tempId: number;
+    row: ReturnType<typeof toLotteryRow>;
+    matchScore: number;
+    matchReason: string;
+  }[] = [];
+  const pendingNewCandidates: {
+    resultIndex: number;
+    targetLotteryId: number; // 実IDまたは負の仮ID（bulk後にtempIdToRealIdで置換）
+    candidateIndex: number;
+    candidateKey: string;
+    matchScore: number;
+    matchReason: string;
+    extractedData: ReturnType<typeof toLotteryRow>;
+  }[] = [];
 
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
@@ -262,16 +315,18 @@ export async function syncLotteriesFromAnalysis(
         const patch: Record<string, unknown> = {};
         for (const c of changes) patch[c.fieldName] = c.newValue;
         await db.update(lotteries).set({ ...patch, updatedAt: new Date().toISOString() }).where(eq(lotteries.id, own.id));
-        for (const c of changes) {
-          await db.insert(lotteryFieldHistory).values({
+        // フィールド数だけ個別INSERTせず、1回のINSERTで複数行まとめて書き込む
+        // （subrequest削減。candidateごとに最大7フィールド分INSERTが発生しうるため）。
+        await db.insert(lotteryFieldHistory).values(
+          changes.map((c) => ({
             lotteryId: own.id,
             sourcePostId,
             fieldName: c.fieldName,
             oldValue: c.oldValue,
             newValue: c.newValue,
-            changeType: "updated",
-          });
-        }
+            changeType: "updated" as const,
+          }))
+        );
       }
       result.results.push({
         lotteryId: own.id,
@@ -285,7 +340,6 @@ export async function syncLotteriesFromAnalysis(
       continue;
     }
 
-    const existing: LotteryRow[] = await db.select().from(lotteries).where(eq(lotteries.lifecycleStatus, "active"));
     const m = matchExistingLottery(candidate, existing, opts);
 
     if (m.matchedIndex !== null) {
@@ -306,15 +360,40 @@ export async function syncLotteriesFromAnalysis(
         continue;
       }
 
-      const upserted = await upsertLotteryUpdateCandidate(db, {
-        targetLotteryId: target.id,
-        sourcePostId,
-        candidateIndex: i,
-        candidateKey: disambiguateCandidateKey(baseKey, occurrence),
-        matchScore: m.score,
-        matchReason: m.reason,
-        extractedData: candidate,
-      });
+      const candidateKey = disambiguateCandidateKey(baseKey, occurrence);
+
+      if (!existingCandidatesByKey.has(candidateKey)) {
+        // 未存在＝INSERT対象。個別に書き込まず、ループ終了後のbulk INSERTへ回す。
+        // candidateIdは後でパッチするため、この時点ではプレースホルダ（-1）を入れておく。
+        result.results.push({ lotteryId: null, candidateId: -1, matchAction: "candidate", matchScore: m.score, changedFields: [] });
+        pendingNewCandidates.push({
+          resultIndex: result.results.length - 1,
+          targetLotteryId: target.id,
+          candidateIndex: i,
+          candidateKey,
+          matchScore: m.score,
+          matchReason: m.reason,
+          extractedData: candidate,
+        });
+        result.candidates++;
+        result.count++;
+        continue;
+      }
+
+      // 既存候補の更新（再解析での内容変化・再マッチング等のレアケース）は従来どおり個別UPDATE。
+      const upserted = await upsertLotteryUpdateCandidate(
+        db,
+        {
+          targetLotteryId: target.id,
+          sourcePostId,
+          candidateIndex: i,
+          candidateKey,
+          matchScore: m.score,
+          matchReason: m.reason,
+          extractedData: candidate,
+        },
+        existingCandidatesByKey
+      );
       result.results.push({
         lotteryId: null,
         candidateId: upserted.id,
@@ -327,38 +406,86 @@ export async function syncLotteriesFromAnalysis(
       continue;
     }
 
-    const [inserted] = await db.insert(lotteries).values(candidate).returning({ id: lotteries.id });
-    const lotteryId = inserted.id;
-    for (const f of CREATED_HISTORY_FIELDS) {
-      const v = candidate[f];
-      if (v != null && String(v).length > 0) {
-        await db.insert(lotteryFieldHistory).values({
-          lotteryId,
-          sourcePostId,
-          fieldName: f,
-          oldValue: null,
-          newValue: String(v),
-          changeType: "created",
-        });
-      }
-    }
-    await db.insert(lotterySources).values({
-      lotteryId,
-      sourcePostId,
-      matchAction: "new",
-      matchScore: String(m.score),
-      matchReason: m.reason,
-      contributedFields: JSON.stringify(CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null)),
-    });
+    // "new"判定: 個別INSERTせず、負の仮IDでin-memory配列にだけ反映してループを継続する。
+    // 実INSERTはループ終了後のbulk処理でまとめて行う。
+    const tempId = nextTempLotteryId--;
+    existing.push({ ...candidate, id: tempId });
     result.results.push({
-      lotteryId,
+      lotteryId: tempId, // bulk INSERT後に実IDへ置き換える
       candidateId: null,
       matchAction: "new",
       matchScore: m.score,
       changedFields: CREATED_HISTORY_FIELDS.filter((f) => candidate[f] != null),
     });
+    pendingNewLotteries.push({ resultIndex: result.results.length - 1, tempId, row: candidate, matchScore: m.score, matchReason: m.reason });
     result.inserted++;
     result.count++;
+  }
+
+  // --- 新規lotteryのbulk INSERT ---
+  const tempIdToRealId = new Map<number, number>();
+  if (pendingNewLotteries.length > 0) {
+    const insertedRows = await db
+      .insert(lotteries)
+      .values(pendingNewLotteries.map((p) => p.row))
+      .returning({ id: lotteries.id });
+
+    const historyRows: { lotteryId: number; sourcePostId: number; fieldName: string; oldValue: null; newValue: string; changeType: "created" }[] = [];
+    const sourceRows: {
+      lotteryId: number;
+      sourcePostId: number;
+      matchAction: "new";
+      matchScore: string;
+      matchReason: string;
+      contributedFields: string;
+    }[] = [];
+
+    for (let j = 0; j < pendingNewLotteries.length; j++) {
+      const p = pendingNewLotteries[j];
+      const realId = insertedRows[j].id;
+      tempIdToRealId.set(p.tempId, realId);
+      result.results[p.resultIndex].lotteryId = realId;
+
+      const contributedFields = CREATED_HISTORY_FIELDS.filter((f) => p.row[f] != null && String(p.row[f]).length > 0);
+      for (const f of contributedFields) {
+        historyRows.push({ lotteryId: realId, sourcePostId, fieldName: f, oldValue: null, newValue: String(p.row[f]), changeType: "created" });
+      }
+      sourceRows.push({
+        lotteryId: realId,
+        sourcePostId,
+        matchAction: "new",
+        matchScore: String(p.matchScore),
+        matchReason: p.matchReason,
+        contributedFields: JSON.stringify(contributedFields),
+      });
+    }
+
+    // フィールド履歴・情報源も、新規lottery1件ごとではなく全件まとめて1回ずつのINSERTにする
+    // （25件の"new"それぞれで最大2回=50回発生していたところを2回に集約する）。
+    if (historyRows.length > 0) await db.insert(lotteryFieldHistory).values(historyRows);
+    if (sourceRows.length > 0) await db.insert(lotterySources).values(sourceRows);
+  }
+
+  // --- 新規候補のbulk INSERT（targetLotteryIdが仮IDの場合は実IDへ置換） ---
+  if (pendingNewCandidates.length > 0) {
+    const insertedRows = await db
+      .insert(lotteryUpdateCandidates)
+      .values(
+        pendingNewCandidates.map((p) => ({
+          targetLotteryId: p.targetLotteryId < 0 ? tempIdToRealId.get(p.targetLotteryId)! : p.targetLotteryId,
+          sourcePostId,
+          candidateIndex: p.candidateIndex,
+          candidateKey: p.candidateKey,
+          matchScore: String(p.matchScore),
+          matchReason: p.matchReason,
+          extractedData: JSON.stringify(p.extractedData),
+          status: "pending",
+        }))
+      )
+      .returning({ id: lotteryUpdateCandidates.id });
+    for (let j = 0; j < pendingNewCandidates.length; j++) {
+      result.results[pendingNewCandidates[j].resultIndex].candidateId = insertedRows[j].id;
+    }
   }
 
   return result;

@@ -169,6 +169,20 @@
       "when": 1787152867791,
       "tag": "0023_swift_proteus",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1787189357395,
+      "tag": "0024_deep_whistler",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1787190713170,
+      "tag": "0025_groovy_expediter",
+      "breakpoints": true
     }
   ]
 }

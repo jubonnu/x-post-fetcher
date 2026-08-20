@@ -4,7 +4,7 @@ import { constants as FS } from "node:fs";
 import { AUTH_STATE } from "../../paths.ts";
 import { ARTICLE_SELECTOR } from "./selectors.ts";
 import { type RawPost } from "./parseTweetDom.ts";
-import { processPageHtmls } from "./postFilter.ts";
+import { processPageHtmls, type RecoveryCursor } from "./postFilter.ts";
 
 export interface FetchOptions {
   targetUser?: string;
@@ -22,13 +22,19 @@ export interface FetchOptions {
   /** 最大スクロール回数。既定60。到達時は警告ログを出す。 */
   maxScrolls?: number;
   /**
-   * リカバリーモード（前回の差分取得が安全上限で打ち切られていた場合に true）。
-   * 通常モードは「連続既知投稿4件」で境界検出するが、前回打ち切りがあった場合はそれだけでは
-   * 誤検出する（安全上限で打ち切った200件の直後が既知投稿の塊になり、その奥に未取得の投稿が
-   * 埋もれている可能性があるため）。true の場合、knownExternalPostIds の全件と一致するまで
-   * 境界検出を行わない（呼び出し元は knownExternalPostIds も全件取得したセットを渡すこと）。
+   * recovery cursor（前回の差分取得が走査未完了で打ち切られていた場合、Workerに保存された
+   * 「前回どこまで遡ったか」の地点）。指定時、この地点（externalPostId一致 or
+   * publishedAtがcursor以前）に到達するまでは「連続既知投稿4件」による境界検出を抑制する
+   * （安全上限で打ち切った直後は既知投稿の塊になり、その奥に未取得の投稿が埋もれている
+   * 可能性があるため）。
+   *
+   * 「knownExternalPostIds全件との一致」を要求する旧方式は、known IDセットが大きくなるほど
+   * （X側のプロフィールスクロールが実際にDOMへ出せる深さを超えると）needsRecoveryが永久に
+   * 収束しなくなる欠陥があったため廃止（2026-08）。cursorは「前回の到達地点」という
+   * 相対的なマイルストーンであり、known IDセットの総数に依存しない。
    */
-  recoveryMode?: boolean;
+  recoveryCursorExternalPostId?: string | null;
+  recoveryCursorPublishedAt?: string | null;
 }
 
 export type FetchStopReason =
@@ -40,8 +46,10 @@ export type FetchStopReason =
 
 export interface FetchStats {
   mode: "initial" | "diff";
-  /** リカバリーモード（既知投稿を全件と突合するまで境界検出しないモード）で実行されたか。 */
+  /** recovery cursorを指定して実行されたか（＝前回走査未完了からの継続実行）。 */
   recoveryMode: boolean;
+  /** 今回のrecoveryCursorに到達できたか（cursor未指定なら常にtrue）。 */
+  cursorReached: boolean;
   scrollsPerformed: number;
   /** 有効な本人投稿の総発見数（新規+既知）。 */
   targetUserPostsSeen: number;
@@ -60,6 +68,12 @@ export interface FetchStats {
    * 初回モードではこの概念自体が適用されないため常に false。
    */
   needsRecovery: boolean;
+  /**
+   * 今回の走査で実際に見つかった最古の有効本人投稿（新規+既知問わず）。次回のrecovery cursor
+   * 候補の生データ（呼び出し元が既存cursorとの単調マージ判断に使う）。1件も見つからなければnull。
+   */
+  oldestValidSeenExternalPostId: string | null;
+  oldestValidSeenPublishedAt: string | null;
 }
 
 export interface FetchResult {
@@ -91,14 +105,11 @@ export interface LoopIterationInput {
   maxNewPostsPerRun: number;
   initialTargetCount: number;
   /**
-   * true の場合、knownExternalPostIds の全件（totalKnownIds）に到達するまで
-   * 境界検出（known-streakによる早期停止）を行わない（前回打ち切りからのリカバリー用）。
+   * 今回イテレーション終了時点の cursorReached（processPageHtmls の返り値）。false の間は
+   * 境界検出（known-streakによる早期停止）を行わない（前回打ち切りからのリカバリー用。
+   * recoveryCursor未指定なら常にtrueなので通常時は無影響）。
    */
-  requireFullKnownMatch: boolean;
-  /** 今回イテレーション終了時点までの既知投稿の累計一致数。 */
-  matchedKnownCount: number;
-  /** 突合対象の既知 externalPostId の総数（knownExternalPostIds.size）。 */
-  totalKnownIds: number;
+  cursorReached: boolean;
 }
 
 export interface LoopIterationDecision {
@@ -124,9 +135,7 @@ export function decideLoopIteration(input: LoopIterationInput): LoopIterationDec
     noGrowth: prevNoGrowth,
     maxNewPostsPerRun,
     initialTargetCount,
-    requireFullKnownMatch,
-    matchedKnownCount,
-    totalKnownIds,
+    cursorReached,
   } = input;
 
   if (isDiffMode && collectedSize >= maxNewPostsPerRun) {
@@ -157,9 +166,10 @@ export function decideLoopIteration(input: LoopIterationInput): LoopIterationDec
       boundaryExtraScrollsRemaining = null;
     }
 
-    // リカバリーモードでは、既知投稿全件と一致するまで境界検出そのものを許可しない
-    // （前回打ち切りで生じた「既知投稿の塊の奥に未取得投稿が埋もれている」ケースの取りこぼし防止）。
-    const boundaryDetectionAllowed = !requireFullKnownMatch || matchedKnownCount >= totalKnownIds;
+    // recovery cursor未到達の間は境界検出そのものを許可しない（前回打ち切りで生じた
+    // 「既知投稿の塊の奥に未取得投稿が埋もれている」ケースの取りこぼし防止）。
+    // cursor未指定（通常の差分取得）なら cursorReached は常にtrueなので無影響。
+    const boundaryDetectionAllowed = cursorReached;
 
     if (boundaryExtraScrollsRemaining === null && boundaryDetectionAllowed && consecutiveKnownStreak >= KNOWN_STREAK_STOP) {
       boundaryExtraScrollsRemaining = EXTRA_SCROLLS_AFTER_BOUNDARY;
@@ -236,8 +246,11 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
   const initialTargetCount = opts.maxPosts ?? 14;
   const knownExternalPostIds = opts.knownExternalPostIds;
   const isDiffMode = Boolean(knownExternalPostIds && knownExternalPostIds.size > 0);
-  const requireFullKnownMatch = isDiffMode && Boolean(opts.recoveryMode);
-  const totalKnownIds = knownExternalPostIds?.size ?? 0;
+  const recoveryCursor: RecoveryCursor | null =
+    opts.recoveryCursorExternalPostId || opts.recoveryCursorPublishedAt
+      ? { externalPostId: opts.recoveryCursorExternalPostId ?? null, publishedAt: opts.recoveryCursorPublishedAt ?? null }
+      : null;
+  const isRecovery = isDiffMode && recoveryCursor !== null;
   const maxNewPostsPerRun = opts.maxNewPostsPerRun ?? 200;
   const maxScrolls = opts.maxScrolls ?? 60;
   const profileUrl = `https://x.com/${targetUser}`;
@@ -247,7 +260,9 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
   console.log(hasAuth ? "[fetch] auth.json 検出（ログイン状態）" : "[fetch] auth.json なし（未ログイン）");
   console.log(
     isDiffMode
-      ? `[fetch] 差分モード（既知投稿 ${totalKnownIds} 件と突合、リカバリーモード=${requireFullKnownMatch}）`
+      ? `[fetch] 差分モード（既知投稿 ${knownExternalPostIds?.size ?? 0} 件と突合、リカバリーモード=${isRecovery}${
+          recoveryCursor ? `、cursor=${recoveryCursor.externalPostId ?? "null"}/${recoveryCursor.publishedAt ?? "null"}` : ""
+        }）`
       : `[fetch] 初回モード（目標 ${initialTargetCount} 件）`
   );
 
@@ -304,6 +319,8 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
     let boundaryExtraScrollsRemaining: number | null = null;
     let stopReason: FetchStopReason = "max_scrolls_reached";
     let scrollsPerformed = 0;
+    let cursorReached = !recoveryCursor;
+    let oldestValidSeen: { externalPostId: string; publishedAt: string } | null = null;
 
     for (let i = 0; i < maxScrolls; i++) {
       scrollsPerformed = i + 1;
@@ -318,12 +335,21 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
         knownExternalPostIds,
         seenArticleIds,
         consecutiveKnownStreak,
+        recoveryCursor,
+        cursorReached,
       });
       consecutiveKnownStreak = result.consecutiveKnownStreak;
       totalKnown += result.known;
       totalSkippedPinned += result.skippedPinned;
       totalSkippedWrongAuthor += result.skippedWrongAuthor;
       totalValidSeen += result.added + result.known;
+      cursorReached = result.cursorReached;
+      if (
+        result.oldestSeen &&
+        (!oldestValidSeen || Date.parse(result.oldestSeen.publishedAt) < Date.parse(oldestValidSeen.publishedAt))
+      ) {
+        oldestValidSeen = result.oldestSeen;
+      }
 
       const decision = decideLoopIteration({
         isDiffMode,
@@ -335,9 +361,7 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
         noGrowth,
         maxNewPostsPerRun,
         initialTargetCount,
-        requireFullKnownMatch,
-        matchedKnownCount: totalKnown,
-        totalKnownIds,
+        cursorReached,
       });
       boundaryExtraScrollsRemaining = decision.boundaryExtraScrollsRemaining;
       noGrowth = decision.noGrowth;
@@ -385,7 +409,8 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
 
     const stats: FetchStats = {
       mode: isDiffMode ? "diff" : "initial",
-      recoveryMode: requireFullKnownMatch,
+      recoveryMode: isRecovery,
+      cursorReached,
       scrollsPerformed,
       targetUserPostsSeen: totalValidSeen,
       knownPosts: totalKnown,
@@ -395,6 +420,8 @@ export async function fetchTweets(opts: FetchOptions = {}): Promise<FetchResult>
       hitSafetyCap,
       stopReason,
       needsRecovery,
+      oldestValidSeenExternalPostId: oldestValidSeen?.externalPostId ?? null,
+      oldestValidSeenPublishedAt: oldestValidSeen?.publishedAt ?? null,
     };
 
     console.log(JSON.stringify({ event: "scrape_fetch_stats", targetUser, ...stats }));

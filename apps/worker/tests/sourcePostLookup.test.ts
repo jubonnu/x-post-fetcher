@@ -36,14 +36,19 @@ const lookup = (authorUsername: string, params: Record<string, string> = {}, tok
   });
 };
 
-const reportRunResult = (authorUsername: string, needsRecovery: boolean, token?: string) =>
+const reportRunResult = (
+  authorUsername: string,
+  needsRecovery: boolean,
+  token?: string,
+  cursor?: { recoveryCursorExternalPostId?: string | null; recoveryCursorPublishedAt?: string | null }
+) =>
   app.request("/internal/source-posts/scrape-run-result", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify({ authorUsername, needsRecovery }),
+    body: JSON.stringify({ authorUsername, needsRecovery, ...cursor }),
   });
 
 beforeAll(async () => {
@@ -169,5 +174,54 @@ describe("POST /internal/source-posts/scrape-run-result", () => {
     const res = await lookup("toggle_user", {}, TOKEN);
     const json: any = await res.json();
     expect(json.needsRecovery).toBe(true);
+  });
+
+  it("recoveryCursorを保存すると known-external-ids のレスポンスに含まれる", async () => {
+    await reportRunResult("cursor_user", true, TOKEN, {
+      recoveryCursorExternalPostId: "5001",
+      recoveryCursorPublishedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const res = await lookup("cursor_user", {}, TOKEN);
+    const json: any = await res.json();
+    expect(json.needsRecovery).toBe(true);
+    expect(json.recoveryCursorExternalPostId).toBe("5001");
+    expect(json.recoveryCursorPublishedAt).toBe("2026-07-01T00:00:00.000Z");
+  });
+
+  it("needsRecovery=falseかつcursor=nullを報告するとcursorが解除される", async () => {
+    await reportRunResult("cursor_user2", true, TOKEN, {
+      recoveryCursorExternalPostId: "6001",
+      recoveryCursorPublishedAt: "2026-07-02T00:00:00.000Z",
+    });
+    await reportRunResult("cursor_user2", false, TOKEN, {
+      recoveryCursorExternalPostId: null,
+      recoveryCursorPublishedAt: null,
+    });
+    const res = await lookup("cursor_user2", {}, TOKEN);
+    const json: any = await res.json();
+    expect(json.needsRecovery).toBe(false);
+    expect(json.recoveryCursorExternalPostId).toBeNull();
+    expect(json.recoveryCursorPublishedAt).toBeNull();
+  });
+
+  it("cursorを省略した報告は既存cursorを変更しない", async () => {
+    await reportRunResult("cursor_user3", true, TOKEN, {
+      recoveryCursorExternalPostId: "7001",
+      recoveryCursorPublishedAt: "2026-07-03T00:00:00.000Z",
+    });
+    await reportRunResult("cursor_user3", true, TOKEN); // cursorフィールド省略
+    const res = await lookup("cursor_user3", {}, TOKEN);
+    const json: any = await res.json();
+    expect(json.recoveryCursorExternalPostId).toBe("7001");
+    expect(json.recoveryCursorPublishedAt).toBe("2026-07-03T00:00:00.000Z");
+  });
+
+  it("recoveryCursorExternalPostIdが文字列/null以外なら400", async () => {
+    const res = await app.request("/internal/source-posts/scrape-run-result", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${TOKEN}` },
+      body: JSON.stringify({ authorUsername: "bad_cursor_user", needsRecovery: true, recoveryCursorExternalPostId: 123 }),
+    });
+    expect(res.status).toBe(400);
   });
 });

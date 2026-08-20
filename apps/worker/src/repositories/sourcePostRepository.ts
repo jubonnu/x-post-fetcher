@@ -7,6 +7,8 @@ export interface UpsertResult {
   action: IngestAction;
   sourcePostId: number;
   externalPostId: string;
+  /** 非nullなら既にアーカイブ済み（`persistAnalysis`をスキップする判定に使う）。 */
+  archivedAt: string | null;
 }
 
 /**
@@ -47,7 +49,7 @@ export async function upsertSourcePost(db: Db, input: SourcePostInput): Promise<
       .insert(sourcePosts)
       .values({ ...values, createdAt: now, updatedAt: now })
       .returning({ id: sourcePosts.id });
-    return { action: "inserted", sourcePostId: inserted[0].id, externalPostId: input.externalPostId };
+    return { action: "inserted", sourcePostId: inserted[0].id, externalPostId: input.externalPostId, archivedAt: null };
   }
 
   const row = existing[0];
@@ -58,15 +60,35 @@ export async function upsertSourcePost(db: Db, input: SourcePostInput): Promise<
       .update(sourcePosts)
       .set({ fetchedAt: input.fetchedAt })
       .where(eq(sourcePosts.id, row.id));
-    return { action: "unchanged", sourcePostId: row.id, externalPostId: input.externalPostId };
+    return { action: "unchanged", sourcePostId: row.id, externalPostId: input.externalPostId, archivedAt: row.archivedAt };
   }
 
-  // 本文変更あり: 全項目更新
+  // 本文変更あり: 全項目更新（archivedAtは対象外＝アーカイブ状態は再取得で変化しない）
   await db
     .update(sourcePosts)
     .set({ ...values, updatedAt: now })
     .where(eq(sourcePosts.id, row.id));
-  return { action: "updated", sourcePostId: row.id, externalPostId: input.externalPostId };
+  return { action: "updated", sourcePostId: row.id, externalPostId: input.externalPostId, archivedAt: row.archivedAt };
+}
+
+/**
+ * source_postを アーカイブ / アンアーカイブする。物理削除は行わない。
+ * アーカイブしても known IDs API からは除外されない（`findRecentExternalPostIdsByAuthor`参照）ため、
+ * 差分取得の既知判定には影響しない。
+ */
+export async function setSourcePostArchived(
+  db: Db,
+  sourcePostId: number,
+  archived: boolean
+): Promise<{ id: number; archivedAt: string | null } | null> {
+  const now = new Date().toISOString();
+  const archivedAt = archived ? now : null;
+  const updated = await db
+    .update(sourcePosts)
+    .set({ archivedAt, updatedAt: now })
+    .where(eq(sourcePosts.id, sourcePostId))
+    .returning({ id: sourcePosts.id, archivedAt: sourcePosts.archivedAt });
+  return updated.length > 0 ? updated[0] : null;
 }
 
 /**
@@ -78,6 +100,10 @@ export async function upsertSourcePost(db: Db, input: SourcePostInput): Promise<
  * `limit`省略時は全件返す。直近の差分取得が安全上限で打ち切られていた場合
  * （`scrape_author_states.lastRunHitSafetyCap`）、直近N件だけの照合では取りこぼしを見逃すため、
  * リカバリーモードとして全件と突合する必要がある（呼び出し元のルートで使い分ける）。
+ *
+ * 意図的に`archivedAt`では絞り込まない: アーカイブ済み投稿もここでは「既知」として返さないと、
+ * 差分取得がアーカイブ済み投稿を毎回「新規」と誤認して再取得・再ingestし続けてしまう
+ * （2026-08、stagingで物理削除運用を試して実際に発生した事故の再発防止）。
  */
 export async function findRecentExternalPostIdsByAuthor(db: Db, authorUsername: string, limit?: number): Promise<string[]> {
   const query = db

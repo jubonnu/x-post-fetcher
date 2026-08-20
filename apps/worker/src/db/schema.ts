@@ -28,6 +28,12 @@ export const sourcePosts = sqliteTable(
     contentHash: text("content_hash"),
     fetchedAt: text("fetched_at"),
     deletedAt: text("deleted_at"),
+    /**
+     * 非nullなら「アーカイブ済み」＝論理的にlottery解析対象から除外された投稿。
+     * 物理削除とは異なり、known IDs API（`findRecentExternalPostIdsByAuthor`）には
+     * 引き続き「既知」として含める（差分取得の再取得ループを防ぐため）。
+     */
+    archivedAt: text("archived_at"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`),
@@ -69,6 +75,17 @@ export type SourcePostInsert = typeof sourcePosts.$inferInsert;
 export const scrapeAuthorStates = sqliteTable("scrape_author_states", {
   authorUsername: text("author_username").primaryKey(),
   needsRecovery: integer("needs_recovery", { mode: "boolean" }).notNull().default(false),
+  /**
+   * recovery cursor（走査未完了時に「今回どこまで遡ったか」を記録する地点）。
+   * 「既知ID全件との一致」を要求する方式は、known IDセットが大きくなるほど
+   * （X側のプロフィールスクロールが実際にDOMへ出せる深さを超えると）永久にneedsRecoveryが
+   * 収束しなくなる欠陥があったため廃止（2026-08）。cursorは単調に古い方向へのみ更新され、
+   * 次回実行はこのcursor地点（IDまたはpublishedAtのどちらかに到達）まで到達するまで
+   * 通常のknown-streak境界検出を抑制する。IDがX側で削除されていてもpublishedAtで
+   * フォールバック可能なよう両方を保持する。
+   */
+  recoveryCursorExternalPostId: text("recovery_cursor_external_post_id"),
+  recoveryCursorPublishedAt: text("recovery_cursor_published_at"),
   updatedAt: text("updated_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),

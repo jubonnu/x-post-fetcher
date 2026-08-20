@@ -1,0 +1,1 @@
+ALTER TABLE `source_posts` ADD `archived_at` text;

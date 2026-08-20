@@ -36,6 +36,14 @@ async function priorSourceLotteryCount(db: Db, sourcePostId: number): Promise<nu
  *  - reused: inputContentHash と parserVersion が両方一致する解析が既にあれば post_analyses・lotteries を変更しない。
  *  - inserted: contentHash が変わった / parserVersion が上がった / 初回 → post_analyses を追加し、抽選候補を
  *    **同一抽選マッチング（match → merge / insert）**で永続化する（Phase 3）。統合・履歴・情報源は Worker 責務。
+ *
+ * post_analyses の追加と抽選候補の同期（syncLotteriesFromAnalysis）は1つのトランザクションに
+ * まとめる。同期処理が候補の途中（例: 大量の候補を含むsummary投稿）で例外を投げた場合、
+ * post_analyses の行だけがanalysisStatus="success"で残ってしまうと、以後の再スクレイプが
+ * inputContentHash+parserVersion一致で「reused」判定してしまい、未処理分の候補が永久に
+ * 取りこぼされる（2026-08、staging実データで実際に発生した事故）。トランザクション全体を
+ * ロールバックすることで、失敗時は post_analyses の行自体が存在しない状態に戻り、次回の
+ * 再スクレイプ（同一内容の再送）で必ず最初からやり直される。
  */
 export async function persistAnalysis(
   db: Db,
@@ -49,36 +57,38 @@ export async function persistAnalysis(
   }
 
   const now = new Date().toISOString();
-  await db.insert(postAnalyses).values({
-    sourcePostId,
-    postType: analysis.postType,
-    isLotteryInformation: analysis.isLotteryInformation,
-    cardType: analysis.cardType,
-    confidenceScore: String(analysis.confidenceScore),
-    analysisStatus: analysis.analysisStatus,
-    parserVersion: analysis.parserVersion,
-    inputContentHash: analysis.inputContentHash,
-    extractedData: JSON.stringify({ lotteries: analysis.extractedLotteries, urls: analysis.urls }),
-    analyzedAt: now,
-    errorMessage: analysis.errorMessage ?? null,
-  });
+  return db.transaction(async (tx) => {
+    await tx.insert(postAnalyses).values({
+      sourcePostId,
+      postType: analysis.postType,
+      isLotteryInformation: analysis.isLotteryInformation,
+      cardType: analysis.cardType,
+      confidenceScore: String(analysis.confidenceScore),
+      analysisStatus: analysis.analysisStatus,
+      parserVersion: analysis.parserVersion,
+      inputContentHash: analysis.inputContentHash,
+      extractedData: JSON.stringify({ lotteries: analysis.extractedLotteries, urls: analysis.urls }),
+      analyzedAt: now,
+      errorMessage: analysis.errorMessage ?? null,
+    });
 
-  // Phase 3: 同一抽選マッチングで統合 / 新規登録し、情報源・変更履歴を記録する。
-  // analysisStatus === "needs_review"（複数抽選の分割失敗・低信頼抽出）は、toLotteryRowが
-  // 日付競合のみで判定する verificationStatus（デフォルト "extracted"）に埋もれてしまうため、
-  // ここで明示的に "needs_review" へ引き上げる（"conflicting" 等より詳細な状態は維持する）。
-  const candidates = analysis.extractedLotteries.map((l) => {
-    const row = toLotteryRow(sourcePostId, l);
-    if (analysis.analysisStatus === "needs_review" && row.verificationStatus === "extracted") {
-      return { ...row, verificationStatus: "needs_review" };
-    }
-    return row;
+    // Phase 3: 同一抽選マッチングで統合 / 新規登録し、情報源・変更履歴を記録する。
+    // analysisStatus === "needs_review"（複数抽選の分割失敗・低信頼抽出）は、toLotteryRowが
+    // 日付競合のみで判定する verificationStatus（デフォルト "extracted"）に埋もれてしまうため、
+    // ここで明示的に "needs_review" へ引き上げる（"conflicting" 等より詳細な状態は維持する）。
+    const candidates = analysis.extractedLotteries.map((l) => {
+      const row = toLotteryRow(sourcePostId, l);
+      if (analysis.analysisStatus === "needs_review" && row.verificationStatus === "extracted") {
+        return { ...row, verificationStatus: "needs_review" };
+      }
+      return row;
+    });
+    // まとめ投稿（lottery_summary）は「取りこぼした新規抽選の補完」が目的のため、既存と明確に
+    // 同一（matchExistingLotteryのmerge閾値以上）の項目はupdate_candidateすら作らずスキップする。
+    // 毎日のまとめ投稿から新規情報の無い重複update_candidateが大量発生することを防ぐため。
+    const synced = await syncLotteriesFromAnalysis(tx, sourcePostId, candidates, {
+      skipOnClearMatch: analysis.postType === "lottery_summary",
+    });
+    return { action: "inserted" as const, lotteryCount: synced.count, lotteryResults: synced.results };
   });
-  // まとめ投稿（lottery_summary）は「取りこぼした新規抽選の補完」が目的のため、既存と明確に
-  // 同一（matchExistingLotteryのmerge閾値以上）の項目はupdate_candidateすら作らずスキップする。
-  // 毎日のまとめ投稿から新規情報の無い重複update_candidateが大量発生することを防ぐため。
-  const synced = await syncLotteriesFromAnalysis(db, sourcePostId, candidates, {
-    skipOnClearMatch: analysis.postType === "lottery_summary",
-  });
-  return { action: "inserted", lotteryCount: synced.count, lotteryResults: synced.results };
 }

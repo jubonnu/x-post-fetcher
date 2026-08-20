@@ -42,8 +42,11 @@ export function registerIngest(app: Hono<AppEnv>): void {
     }
 
     // --- analysis 永続化（あれば）。解析失敗でも sourcePost は保持済み ---
+    // アーカイブ済みsourcePostはlottery解析・再解析の対象外（要件: archivedから新規lottery/candidateを作らない）。
     let analysis: { action: string; lotteryCount: number; lotteryResults?: unknown[] } | undefined;
-    if (parsed.data.analysis) {
+    if (parsed.data.analysis && result.archivedAt) {
+      analysis = { action: "skipped_archived", lotteryCount: 0 };
+    } else if (parsed.data.analysis) {
       try {
         analysis = await persistAnalysis(db, result.sourcePostId, parsed.data.analysis);
       } catch (e) {

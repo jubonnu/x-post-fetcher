@@ -22,15 +22,23 @@ import { classifyEntryPurpose, type EntryPurpose } from "../lottery/entryPurpose
  *   走査結果が「既知投稿の境界まで安全に到達し、安全マージンも完了した」と確認できなかった場合
  *   （安全上限到達／既知境界未確認のままMAX_SCROLLS到達／既知境界未確認のままstall）は
  *   「走査未完了（needsRecovery）」として扱う。この場合、新規投稿をingestするより前に
- *   Workerへ needsRecovery=true を確実に保存し、保存に失敗したらingest自体を行わずバッチを
- *   失敗させる（走査未完了の事実を記録し損ねたまま新規投稿だけが既知化されると、次回が誤って
- *   通常モードに戻り取りこぼす致命的な経路になるため）。
- *   保存に成功した場合のみ、続けてingestする。次回実行はリカバリーモード（既知投稿を全件と
- *   突合し、known-streakの早期停止を抑制する）で実行される。
+ *   Workerへ needsRecovery=true と recovery cursor（今回どこまで遡ったか）を確実に保存し、
+ *   保存に失敗したらingest自体を行わずバッチを失敗させる（走査未完了の事実を記録し損ねたまま
+ *   新規投稿だけが既知化されると、次回が誤って通常モードに戻り取りこぼす致命的な経路になるため）。
+ *   保存に成功した場合のみ、続けてingestする。
+ *
+ *   recovery cursor方式（2026-08〜）: 次回実行は「knownExternalPostIds全件との一致」ではなく
+ *   「前回保存されたcursor地点（externalPostId一致 or publishedAtがcursor以前）に到達するまで」
+ *   known-streakの早期停止を抑制する。全件一致を要求する方式は、known IDセットが大きくなるほど
+ *   （X側のプロフィールスクロールが実際にDOMへ出せる深さを超えると）needsRecoveryが永久に
+ *   収束しなくなる欠陥があったため廃止した。cursorは`mergeRecoveryCursor`で単調（古い方向へのみ）
+ *   に更新され、今回cursorに到達できなかった場合は既存cursorを保持する（後退しない）。
+ *   archive済み（archivedAt付き）のsource_postもknown IDとしては扱われるが、cursor到達判定の
+ *   母数には一切影響しない（archive件数が多くてもrecoveryは収束できる）。
  *
  *   逆に走査完了（stopReasonが"known_streak_boundary_with_margin"）の場合は、ingest成功後に
- *   needsRecovery=falseへの解除を試みる（ベストエフォート。失敗しても次回もrecoveryモードに
- *   留まるだけで、取りこぼし方向には倒れないため安全）。
+ *   needsRecovery=false・cursor解除（null）を試みる（ベストエフォート。失敗しても次回も
+ *   recoveryモードに留まるだけで、取りこぼし方向には倒れないため安全）。
  *
  *   安全上限に到達しない・走査完了の実行が1回できるまでこれを繰り返すことで、複数回の実行を
  *   通じて取りこぼしなく全件回収されることを保証する。
@@ -47,8 +55,36 @@ import { classifyEntryPurpose, type EntryPurpose } from "../lottery/entryPurpose
  */
 
 type KnownIdsLookupResult =
-  | { ok: true; externalPostIds: Set<string>; needsRecovery: boolean }
+  | {
+      ok: true;
+      externalPostIds: Set<string>;
+      needsRecovery: boolean;
+      recoveryCursorExternalPostId: string | null;
+      recoveryCursorPublishedAt: string | null;
+    }
   | { ok: false; reason: string };
+
+interface RecoveryCursorPoint {
+  externalPostId: string;
+  publishedAt: string;
+}
+
+/**
+ * recovery cursorを単調（＝古い方向へのみ進む）にマージする。
+ * 「knownExternalPostIds全件との一致」を要求する旧方式は、known IDセットが大きくなるほど
+ * needsRecoveryが永久に収束しなくなる欠陥があったため、cursorは「前回の到達地点」という
+ * 相対的なマイルストーンに置き換えた（2026-08）。このマージ関数がその中核: 今回の走査で
+ * 到達した最古地点(candidate)が既存cursor(existing)より古ければ前進、そうでなければ
+ * 既存cursorを保持する（今回cursorに到達できなかった場合の後退防止）。
+ */
+export function mergeRecoveryCursor(
+  existing: RecoveryCursorPoint | null,
+  candidate: RecoveryCursorPoint | null
+): RecoveryCursorPoint | null {
+  if (!candidate) return existing;
+  if (!existing) return candidate;
+  return Date.parse(candidate.publishedAt) < Date.parse(existing.publishedAt) ? candidate : existing;
+}
 
 interface IngestCounts {
   inserted: number;
@@ -91,7 +127,13 @@ export async function fetchKnownExternalPostIds(baseUrl: string, token: string, 
     if (!res.ok) {
       return { ok: false, reason: `known-external-ids照会が失敗しました（status=${res.status}）` };
     }
-    const json = (await res.json()) as { ok?: boolean; externalPostIds?: unknown; needsRecovery?: unknown };
+    const json = (await res.json()) as {
+      ok?: boolean;
+      externalPostIds?: unknown;
+      needsRecovery?: unknown;
+      recoveryCursorExternalPostId?: unknown;
+      recoveryCursorPublishedAt?: unknown;
+    };
     if (!json.ok || !Array.isArray(json.externalPostIds)) {
       return { ok: false, reason: "known-external-idsのレスポンス形式が不正です" };
     }
@@ -99,6 +141,8 @@ export async function fetchKnownExternalPostIds(baseUrl: string, token: string, 
       ok: true,
       externalPostIds: new Set(json.externalPostIds as string[]),
       needsRecovery: Boolean(json.needsRecovery),
+      recoveryCursorExternalPostId: typeof json.recoveryCursorExternalPostId === "string" ? json.recoveryCursorExternalPostId : null,
+      recoveryCursorPublishedAt: typeof json.recoveryCursorPublishedAt === "string" ? json.recoveryCursorPublishedAt : null,
     };
   } catch (e) {
     return { ok: false, reason: `known-external-ids照会でエラーが発生しました: ${e instanceof Error ? e.message : String(e)}` };
@@ -106,17 +150,33 @@ export async function fetchKnownExternalPostIds(baseUrl: string, token: string, 
 }
 
 /**
- * 今回の走査結果（needsRecovery）をWorkerへ保存する。成功/失敗を呼び出し元へ返す
+ * 今回の走査結果（needsRecovery / recovery cursor）をWorkerへ保存する。成功/失敗を呼び出し元へ返す
  * （failure時にバッチ全体を失敗させるかどうかは呼び出し元の責務で判断する。
  *  true保存の失敗はバッチ失敗に直結させ、false解除の失敗は警告に留める、という非対称な扱いのため）。
+ * `cursor`省略時はWorker側でcursorを変更しない。`null`を渡すと明示的に解除する。
  */
-async function setNeedsRecovery(baseUrl: string, token: string, targetUser: string, needsRecovery: boolean): Promise<boolean> {
+async function saveScrapeRunResult(
+  baseUrl: string,
+  token: string,
+  targetUser: string,
+  needsRecovery: boolean,
+  cursor?: RecoveryCursorPoint | null
+): Promise<boolean> {
   const url = new URL("/internal/source-posts/scrape-run-result", baseUrl);
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ authorUsername: targetUser, needsRecovery }),
+      body: JSON.stringify({
+        authorUsername: targetUser,
+        needsRecovery,
+        ...(cursor !== undefined
+          ? {
+              recoveryCursorExternalPostId: cursor?.externalPostId ?? null,
+              recoveryCursorPublishedAt: cursor?.publishedAt ?? null,
+            }
+          : {}),
+      }),
     });
     return res.ok;
   } catch {
@@ -199,7 +259,7 @@ export async function main(): Promise<void> {
   const knownIdsLookback = Number(process.env.KNOWN_IDS_LOOKBACK ?? 200);
 
   let knownExternalPostIds = new Set<string>();
-  let recoveryMode = false;
+  let existingCursor: RecoveryCursorPoint | null = null;
 
   if (token) {
     const lookup = await fetchKnownExternalPostIds(ingestUrl, token, targetUser, knownIdsLookback);
@@ -209,9 +269,12 @@ export async function main(): Promise<void> {
       throw new Error(`known-external-idsの取得に失敗したため今回のスクレイプを中止しました: ${lookup.reason}`);
     }
     knownExternalPostIds = lookup.externalPostIds;
-    recoveryMode = lookup.needsRecovery;
+    existingCursor =
+      lookup.recoveryCursorExternalPostId && lookup.recoveryCursorPublishedAt
+        ? { externalPostId: lookup.recoveryCursorExternalPostId, publishedAt: lookup.recoveryCursorPublishedAt }
+        : null;
     console.log(
-      `[scrape] 既知投稿 ${knownExternalPostIds.size} 件と突合します（0件なら初回モード、リカバリーモード=${recoveryMode}）`
+      `[scrape] 既知投稿 ${knownExternalPostIds.size} 件と突合します（0件なら初回モード、リカバリーモード=${Boolean(existingCursor)}）`
     );
   }
   // token未設定（INGEST_TOKENなしのローカル動作確認）の場合のみ、既知ID照会自体を行わず
@@ -223,7 +286,8 @@ export async function main(): Promise<void> {
     knownExternalPostIds,
     maxNewPostsPerRun,
     maxScrolls,
-    recoveryMode,
+    recoveryCursorExternalPostId: existingCursor?.externalPostId ?? null,
+    recoveryCursorPublishedAt: existingCursor?.publishedAt ?? null,
   });
   console.log(`[scrape] batchId=${batchId} 取得 ${posts.length} 件 ${JSON.stringify(stats)}`);
 
@@ -238,10 +302,17 @@ export async function main(): Promise<void> {
 
   const isDiffMode = knownExternalPostIds.size > 0;
 
-  // 走査未完了なら、新規投稿をingestするより前にWorkerへ needsRecovery=true を確実に保存する。
-  // 保存に失敗した場合はingestを一切行わずバッチを失敗させる（次回cronで再試行）。
+  // 走査未完了なら、新規投稿をingestするより前にWorkerへ needsRecovery=true と
+  // 更新後のrecovery cursorを確実に保存する。保存に失敗した場合はingestを一切行わず
+  // バッチを失敗させる（次回cronで再試行）。cursorは単調（古い方向へのみ）にマージするため、
+  // 今回cursorに到達できなかった場合は既存cursorがそのまま維持される（後退しない）。
   if (isDiffMode && stats.needsRecovery) {
-    const saved = await setNeedsRecovery(ingestUrl, token, targetUser, true);
+    const candidate: RecoveryCursorPoint | null =
+      stats.oldestValidSeenExternalPostId && stats.oldestValidSeenPublishedAt
+        ? { externalPostId: stats.oldestValidSeenExternalPostId, publishedAt: stats.oldestValidSeenPublishedAt }
+        : null;
+    const newCursor = mergeRecoveryCursor(existingCursor, candidate);
+    const saved = await saveScrapeRunResult(ingestUrl, token, targetUser, true, newCursor);
     if (!saved) {
       throw new Error(
         "走査未完了（needsRecovery）状態の保存に失敗したため、今回のingestを中止しました。次回cronで今回未反映の新規投稿ごと再試行されます。"
@@ -298,10 +369,10 @@ export async function main(): Promise<void> {
     `[scrape] 完了 inserted=${counts.inserted} updated=${counts.updated} unchanged=${counts.unchanged} failed=${counts.failed}`
   );
 
-  // 走査完了（既知境界まで安全に到達）した場合のみ、ingest成功後にneedsRecoveryの解除を試みる。
+  // 走査完了（既知境界まで安全に到達）した場合のみ、ingest成功後にneedsRecoveryとcursorの解除を試みる。
   // 解除に失敗しても次回もrecoveryモードに留まるだけで安全側（取りこぼし方向には倒れない）。
   if (isDiffMode && !stats.needsRecovery) {
-    const cleared = await setNeedsRecovery(ingestUrl, token, targetUser, false);
+    const cleared = await saveScrapeRunResult(ingestUrl, token, targetUser, false, null);
     if (!cleared) {
       console.warn("[scrape] needsRecovery解除に失敗しました。次回もリカバリーモードで実行されます（安全側のフォールバック）。");
     }

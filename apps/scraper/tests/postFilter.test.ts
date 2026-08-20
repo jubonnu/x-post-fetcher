@@ -345,6 +345,80 @@ describe("processPageHtmls（差分取得）", () => {
     expect(r.known).toBe(0);
     expect(r.consecutiveKnownStreak).toBe(0);
   });
+
+  it("oldestSeenは今回コールで見つかった有効投稿のうち最古の1件を返す", () => {
+    const collected = new Map<string, RawPost>();
+    const htmls = [
+      makeArticleHtml("9101", TARGET, "2026-08-19T12:00:00.000Z"),
+      makeArticleHtml("9102", TARGET, "2026-08-19T08:00:00.000Z"), // 最古
+      makeArticleHtml("9103", TARGET, "2026-08-19T10:00:00.000Z"),
+    ];
+    const r = processPageHtmls(htmls, TARGET, collected);
+    expect(r.oldestSeen).toEqual({ externalPostId: "9102", publishedAt: "2026-08-19T08:00:00.000Z" });
+  });
+
+  it("recoveryCursor未指定ならcursorReachedは常にtrue（ゲーティングなし）", () => {
+    const collected = new Map<string, RawPost>();
+    const r = processPageHtmls([makeArticleHtml("9201", TARGET, "2026-08-19T12:00:00.000Z")], TARGET, collected);
+    expect(r.cursorReached).toBe(true);
+  });
+
+  it("recoveryCursor指定時、externalPostId一致でcursorReachedになる", () => {
+    const collected = new Map<string, RawPost>();
+    const htmls = [
+      makeArticleHtml("9301", TARGET, "2026-08-19T12:00:00.000Z"),
+      makeArticleHtml("9302", TARGET, "2026-08-19T11:00:00.000Z"), // cursor本体
+      makeArticleHtml("9303", TARGET, "2026-08-19T10:00:00.000Z"),
+    ];
+    const r = processPageHtmls(htmls, TARGET, collected, {
+      recoveryCursor: { externalPostId: "9302", publishedAt: "2026-08-19T11:00:00.000Z" },
+    });
+    expect(r.cursorReached).toBe(true);
+  });
+
+  it("recoveryCursor指定時、cursor投稿がDOMに無くてもpublishedAtフォールバックでcursorReachedになる（cursor投稿がX上で削除された場合を模す）", () => {
+    const collected = new Map<string, RawPost>();
+    const htmls = [
+      makeArticleHtml("9401", TARGET, "2026-08-19T12:00:00.000Z"),
+      // 9402（cursor本体）はX側で削除済み想定でDOMに存在しない
+      makeArticleHtml("9403", TARGET, "2026-08-19T10:30:00.000Z"), // cursorのpublishedAtより古い
+    ];
+    const r = processPageHtmls(htmls, TARGET, collected, {
+      recoveryCursor: { externalPostId: "9402", publishedAt: "2026-08-19T11:00:00.000Z" },
+    });
+    expect(r.cursorReached).toBe(true);
+  });
+
+  it("recoveryCursorに到達する前はcursorReachedはfalseのまま", () => {
+    const collected = new Map<string, RawPost>();
+    const htmls = [makeArticleHtml("9501", TARGET, "2026-08-19T12:00:00.000Z")];
+    const r = processPageHtmls(htmls, TARGET, collected, {
+      recoveryCursor: { externalPostId: "9599", publishedAt: "2026-08-01T00:00:00.000Z" },
+    });
+    expect(r.cursorReached).toBe(false);
+  });
+
+  it("cursorReachedはコール間で引き継がれ、一度trueになったら以後もtrue", () => {
+    const collected = new Map<string, RawPost>();
+    const cursor = { externalPostId: "9602", publishedAt: "2026-08-19T11:00:00.000Z" };
+    const r1 = processPageHtmls([makeArticleHtml("9601", TARGET, "2026-08-19T12:00:00.000Z")], TARGET, collected, {
+      recoveryCursor: cursor,
+    });
+    expect(r1.cursorReached).toBe(false);
+
+    const r2 = processPageHtmls([makeArticleHtml("9602", TARGET, "2026-08-19T11:00:00.000Z")], TARGET, collected, {
+      recoveryCursor: cursor,
+      cursorReached: r1.cursorReached,
+    });
+    expect(r2.cursorReached).toBe(true);
+
+    // さらに古い投稿（cursorより前のpublishedAt）でも一度trueになったcursorReachedは維持される
+    const r3 = processPageHtmls([makeArticleHtml("9603", TARGET, "2026-08-19T09:00:00.000Z")], TARGET, collected, {
+      recoveryCursor: cursor,
+      cursorReached: r2.cursorReached,
+    });
+    expect(r3.cursorReached).toBe(true);
+  });
 });
 
 // ---- 展開済みURL ------------------------------------------------------------

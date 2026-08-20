@@ -58,6 +58,11 @@ export function isPinnedPost(html: string): boolean {
   return /Pinned|固定済み/.test(m[1]);
 }
 
+export interface RecoveryCursor {
+  externalPostId: string | null;
+  publishedAt: string | null;
+}
+
 export interface ProcessResult {
   added: number;
   /** 既知（knownExternalPostIds に含まれる）本人投稿として検出した件数（今回コール分）。 */
@@ -69,6 +74,13 @@ export interface ProcessResult {
    * （連続何件既知投稿が続いたか）に使う。knownExternalPostIds 未指定時は常に 0。
    */
   consecutiveKnownStreak: number;
+  /**
+   * recovery cursor（前回走査未完了時の到達地点）に到達したか（一度trueになったら以後もtrue）。
+   * `recoveryCursor`未指定なら常に呼び出し時点の値をそのまま返す（cursorなし＝ゲーティング不要）。
+   */
+  cursorReached: boolean;
+  /** 今回コールで見つかった有効な本人投稿（既知/新規問わず）のうち最古の1件。無ければnull。 */
+  oldestSeen: { externalPostId: string; publishedAt: string } | null;
 }
 
 export interface ProcessPageHtmlsOptions {
@@ -86,6 +98,13 @@ export interface ProcessPageHtmlsOptions {
   seenArticleIds?: Set<string>;
   /** 前回コール終了時点の consecutiveKnownStreak（スクロール間で引き継ぐ）。 */
   consecutiveKnownStreak?: number;
+  /**
+   * recovery cursor（前回走査未完了時に保存した「今回どこまで遡ったか」）。未指定/nullなら
+   * cursorゲーティングを行わない（＝境界検出は常に許可、cursorReachedは常にtrue）。
+   */
+  recoveryCursor?: RecoveryCursor | null;
+  /** 前回コール終了時点の cursorReached（スクロール間で引き継ぐ）。 */
+  cursorReached?: boolean;
 }
 
 /**
@@ -101,11 +120,14 @@ export function processPageHtmls(
   const knownExternalPostIds = options.knownExternalPostIds;
   const seenArticleIds = options.seenArticleIds ?? new Set<string>();
   let consecutiveKnownStreak = options.consecutiveKnownStreak ?? 0;
+  const recoveryCursor = options.recoveryCursor ?? null;
+  let cursorReached = options.cursorReached ?? !recoveryCursor;
 
   let added = 0;
   let known = 0;
   let skippedPinned = 0;
   let skippedWrongAuthor = 0;
+  let oldestSeen: { externalPostId: string; publishedAt: string } | null = null;
 
   for (const html of htmls) {
     try {
@@ -135,6 +157,22 @@ export function processPageHtmls(
         continue;
       }
 
+      if (post.publishedAt && (!oldestSeen || Date.parse(post.publishedAt) < Date.parse(oldestSeen.publishedAt))) {
+        oldestSeen = { externalPostId: post.tweetId, publishedAt: post.publishedAt };
+      }
+
+      if (!cursorReached && recoveryCursor) {
+        if (recoveryCursor.externalPostId && post.tweetId === recoveryCursor.externalPostId) {
+          cursorReached = true;
+        } else if (
+          recoveryCursor.publishedAt &&
+          post.publishedAt &&
+          Date.parse(post.publishedAt) <= Date.parse(recoveryCursor.publishedAt)
+        ) {
+          cursorReached = true;
+        }
+      }
+
       if (knownExternalPostIds && knownExternalPostIds.has(post.tweetId)) {
         known++;
         consecutiveKnownStreak++;
@@ -151,5 +189,5 @@ export function processPageHtmls(
     }
   }
 
-  return { added, known, skippedPinned, skippedWrongAuthor, consecutiveKnownStreak };
+  return { added, known, skippedPinned, skippedWrongAuthor, consecutiveKnownStreak, cursorReached, oldestSeen };
 }
