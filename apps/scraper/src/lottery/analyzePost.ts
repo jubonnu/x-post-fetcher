@@ -15,8 +15,13 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  * 8: splitLotteriesの(0)(1)分岐（【商品名】セクション＋✅店舗マーカー形式・✅店舗マーカーのみの
  *    まとめ投稿）にも同様の個別URL割り当てを適用（7では(2)分岐＝「商品「」直後にURL」形式のみ
  *    対応していた。2026-08、sourcePostId=149で確認）。
+ * 9: 店舗公式ドメイン対応表（STORE_OFFICIAL_DOMAINS）に実データから判明した店舗を追加登録
+ *    （p-bandai.jp/edion-cp.com/konamistyle.jp/dmm.com/hareruya2.com/limited.yodobashi.com/
+ *    books.rakuten.co.jp/jumpshop-benelic.com/online.ministop.co.jp/iyec.itoyokado.co.jp）。
+ *    加えて汎用の抽選代行プラットフォーム（customform.jp/shoplottery.e-starbox.com）を
+ *    classifyUrlのallowlistに追加（2026-08）。
  */
-export const PARSER_VERSION = "phase3-rules-8";
+export const PARSER_VERSION = "phase3-rules-9";
 
 interface ComplexitySignals {
   productCount: number;

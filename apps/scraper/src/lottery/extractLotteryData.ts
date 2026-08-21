@@ -184,7 +184,19 @@ const APPLICATION_PROXIMITY_KEYWORDS = ["応募はこちら", "抽選受付", "�
  * 誤爆を避けるため、店舗名に別名が部分一致した場合のみ対応ドメインを候補にする
  * （店舗名が無い/一致しない投稿には一切影響しない）。
  */
-const STORE_OFFICIAL_DOMAINS: { aliases: string[]; domain: string }[] = [{ aliases: ["駿河屋"], domain: "suruga-ya.jp" }];
+const STORE_OFFICIAL_DOMAINS: { aliases: string[]; domain: string }[] = [
+  { aliases: ["駿河屋"], domain: "suruga-ya.jp" },
+  { aliases: ["プレミアムバンダイ"], domain: "p-bandai.jp" },
+  { aliases: ["エディオン"], domain: "edion-cp.com" },
+  { aliases: ["コナミスタイル"], domain: "konamistyle.jp" },
+  { aliases: ["DMM通販", "DMMマイカ"], domain: "dmm.com" },
+  { aliases: ["晴れる屋"], domain: "hareruya2.com" },
+  { aliases: ["ヨドバシ"], domain: "limited.yodobashi.com" },
+  { aliases: ["楽天ブックス"], domain: "books.rakuten.co.jp" },
+  { aliases: ["ジャンプショップ"], domain: "jumpshop-benelic.com" },
+  { aliases: ["ミニストップ"], domain: "online.ministop.co.jp" },
+  { aliases: ["イトーヨーカドー"], domain: "iyec.itoyokado.co.jp" },
+];
 
 /** 明らかに応募URLではない（SNS等の）ドメイン。優先度3/4のフォールバック候補から除外する。 */
 const IRRELEVANT_DOMAIN_SUFFIXES = ["instagram.com", "youtube.com", "youtu.be", "tiktok.com", "facebook.com", "threads.net"];

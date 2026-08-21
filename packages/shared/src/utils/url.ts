@@ -46,7 +46,11 @@ export function classifyUrl(raw: string): ClassifiedUrl {
     urlType = "x_post";
   } else if (/membercard\.jp|会員|member|signup|register/.test(s)) {
     urlType = "membership_registration";
-  } else if (/docs\.google\.com\/forms|forms\.gle|passmarket|livepocket|select-type|cloud-pass/.test(s)) {
+  } else if (
+    /docs\.google\.com\/forms|forms\.gle|passmarket|livepocket|select-type|cloud-pass|customform\.jp|shoplottery\.e-starbox\.com/.test(
+      s
+    )
+  ) {
     urlType = "application";
   } else if (/pokemoncenter-online\.com\/news|\/news\//.test(s)) {
     urlType = "official_information";

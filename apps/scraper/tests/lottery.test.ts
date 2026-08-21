@@ -458,6 +458,25 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     expect(analysis.analysisStatus).toBe("success");
   });
 
+  it("2b. 追加登録した店舗公式ドメイン（実データから抽出、2026-08）が正しくapplicationUrlになる", async () => {
+    const cases: { store: string; domain: string }[] = [
+      { store: "プレミアムバンダイ", domain: "p-bandai.jp" },
+      { store: "エディオン", domain: "edion-cp.com" },
+      { store: "コナミスタイル", domain: "konamistyle.jp" },
+      { store: "晴れる屋", domain: "hareruya2.com" },
+      { store: "ヨドバシドットコム", domain: "limited.yodobashi.com" },
+      { store: "楽天ブックス", domain: "books.rakuten.co.jp" },
+      { store: "ジャンプショップ", domain: "jumpshop-benelic.com" },
+      { store: "イトーヨーカドー", domain: "iyec.itoyokado.co.jp" },
+    ];
+    for (const { store, domain } of cases) {
+      const links: ExternalLink[] = [{ href: "https://t.co/dom1", text: `${domain}/lottery/abc` }];
+      const post = makePost(`${store}で「テスト商品」抽選開始されました\n詳細はこちら\nhttps://${domain}/lottery/abc`, links);
+      const analysis = await analyzePost(post);
+      expect(analysis.extractedLotteries[0].applicationUrl, `store=${store}`).toBe("https://t.co/dom1");
+    }
+  });
+
   it("3. allowlist外の店舗公式ドメインでも、応募関連文言に近接していればapplication扱い", async () => {
     const links: ExternalLink[] = [{ href: "https://t.co/hobby1", text: "hobbystation.co.jp/lottery/123" }];
     const post = makePost(

@@ -25,6 +25,11 @@ describe("classifyUrl", () => {
     expect(classifyUrl("t.livepocket.jp/e/abc").urlType).toBe("application");
   });
 
+  it("汎用の抽選代行プラットフォーム（複数店舗で使い回される）→ application", () => {
+    expect(classifyUrl("https://customform.jp/f/abc123").urlType).toBe("application");
+    expect(classifyUrl("https://shoplottery.e-starbox.com/xxx").urlType).toBe("application");
+  });
+
   it("不明なドメイン → unknown、domain は抽出される", () => {
     const r = classifyUrl("https://example.com/foo");
     expect(r.urlType).toBe("unknown");
