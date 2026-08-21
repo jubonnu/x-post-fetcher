@@ -250,6 +250,35 @@ function lineMatchesLinkText(line: string, linkText: string): boolean {
  * 個別URLが振られていたが、ドメインだけで判定すると区別できず全商品に1件目のURLが
  * 誤って共有されていた）。
  */
+/**
+ * 「✅店舗名 日付〆\nURL」のように、マーカー行（店舗名）の直後（1〜2行以内）に個別の応募URLが
+ * 書かれているケースで、その行専用のURLを探す（splitLotteriesの(0)(1)分岐で使用）。
+ * 同一テキストの行が投稿内に複数回出現する場合（同じ店舗名が別商品セクションにも登場する等）に
+ * 備え、`occurrence`（0始まり、呼び出し元が出現順に加算して渡す）で何回目の出現かを指定する。
+ * 見つからなければ null（呼び出し元は投稿全体で共有のapplicationUrlにフォールバックする）。
+ */
+function findUrlAfterExactLine(links: ExternalLink[], bodyLines: string[], targetLine: string, occurrence: number): ExternalLink | null {
+  const candidates = links.filter((l) => l.text);
+  if (candidates.length === 0) return null;
+  const trimmedTarget = targetLine.trim();
+  let seen = 0;
+  for (let i = 0; i < bodyLines.length; i++) {
+    if (bodyLines[i].trim() !== trimmedTarget) continue;
+    if (seen < occurrence) {
+      seen++;
+      continue;
+    }
+    for (let offset = 1; offset <= 2; offset++) {
+      const line = bodyLines[i + offset];
+      if (line === undefined) continue;
+      const match = candidates.find((l) => lineMatchesLinkText(line, l.text));
+      if (match) return match;
+    }
+    return null;
+  }
+  return null;
+}
+
 function findUrlNearProductOccurrence(links: ExternalLink[], lines: string[], productName: string): ExternalLink | null {
   const candidates = links.filter((l) => l.text);
   if (candidates.length === 0) return null;
@@ -469,6 +498,18 @@ export function splitLotteries(
   const sectionMatches = [...body.matchAll(/【([^】]{1,100})】([\s\S]*?)(?=【|$)/g)].filter(
     ([, header]) => !isSectionLabel(header.trim())
   );
+  // (0)(1)共通: マーカー行の直後にある個別URLを優先して割り当てる。同一テキストの行が
+  // 複数回登場する場合に備え、出現順を数える（2026-08、sourcePostId=149のような
+  // 「【商品名】セクションごとに✅店舗＋直後URLが複数並ぶ」投稿で、全店舗に同じURLが
+  // 誤って割り当てられていた不具合の修正。sourcePostId=251の(2)分岐修正では未対応だった）。
+  const fullBodyLines = body.split(/\n+/);
+  const markerLineOccurrence = new Map<string, number>();
+  const nextOccurrence = (line: string): number => {
+    const n = markerLineOccurrence.get(line) ?? 0;
+    markerLineOccurrence.set(line, n + 1);
+    return n;
+  };
+
   if (sectionMatches.length > 0) {
     const sectionResults: ExtractedLottery[] = [];
     for (const [, sectionProductRaw, sectionBody] of sectionMatches) {
@@ -476,7 +517,8 @@ export function splitLotteries(
       const sectionMarkerLines = sectionBody.split(/\n+/).filter((l) => LIST_MARKER_PATTERN.test(l));
       for (const line of sectionMarkerLines) {
         const { store, applicationEnd } = parseStoreAndDeadline(stripListMarker(line));
-        sectionResults.push(make(sectionProduct, store, applicationEnd));
+        const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
+        sectionResults.push(make(sectionProduct, store, applicationEnd, perItemUrl?.href));
       }
     }
     if (sectionResults.length >= 2) return sectionResults;
@@ -491,7 +533,8 @@ export function splitLotteries(
       const lineProduct = extractProductName(rest);
       const withoutProduct = lineProduct ? rest.replace(/[「『][^」』]{1,60}[」』]/, "").trim() : rest;
       const { store, applicationEnd } = parseStoreAndDeadline(withoutProduct);
-      return make(lineProduct ?? headerProduct, store, applicationEnd);
+      const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
+      return make(lineProduct ?? headerProduct, store, applicationEnd, perItemUrl?.href);
     });
   }
 

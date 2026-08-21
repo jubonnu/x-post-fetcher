@@ -12,8 +12,11 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  * 7: splitLotteries（複数商品まとめ投稿の分割）で、商品ごとに直後の個別URLを優先して
  *    割り当てるよう修正（それまでは投稿内の最初のURLを全商品で共有してしまっていた。
  *    2026-08、sourcePostId=251で確認）。
+ * 8: splitLotteriesの(0)(1)分岐（【商品名】セクション＋✅店舗マーカー形式・✅店舗マーカーのみの
+ *    まとめ投稿）にも同様の個別URL割り当てを適用（7では(2)分岐＝「商品「」直後にURL」形式のみ
+ *    対応していた。2026-08、sourcePostId=149で確認）。
  */
-export const PARSER_VERSION = "phase3-rules-7";
+export const PARSER_VERSION = "phase3-rules-8";
 
 interface ComplexitySignals {
   productCount: number;

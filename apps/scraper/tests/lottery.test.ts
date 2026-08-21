@@ -550,4 +550,34 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     const urls = analysis.extractedLotteries.map((l) => l.applicationUrl);
     expect(new Set(urls).size).toBe(6);
   });
+
+  it("回帰確認: sourcePostId 149（【商品名】セクション＋✅店舗マーカー、production実データ）相当のケースで店舗ごとに個別のapplicationUrlが割り当てられる", async () => {
+    const links: ExternalLink[] = [
+      { href: "https://t.co/Ro4tFRT4Zi", text: "https://aeon.com/aeonapp/about/" },
+      { href: "https://t.co/6aUc3OfTD4", text: "https://form.amiami.jp/draw20260730" },
+      { href: "https://t.co/NOuldtFB7Y", text: "https://p-bandai.jp/item/item-1000255170/…" },
+      { href: "https://t.co/JYqa4tSE17", text: "https://docs.google.com/forms/d/e/1FAIpQLSffABPUyiR62_4WCWrJJs3GI7JPee7B9sC8Eh3qqCR9nSo1YA/viewform…" },
+      { href: "https://t.co/7c1a4YI3ld", text: "https://dorasuta.membercard.jp/lottery" },
+    ];
+    const body =
+      "週末なのでまだ応募できる抽選全てまとめました🙆‍♂️\n\n【世界最強の戦士】\n" +
+      "✅iAEONアプリ(九州限定) 8/2(日)23:59〆\nhttps://aeon.com/aeonapp/about/\n\n" +
+      "✅あみあみ通販 8/4(火)13:59〆\nhttps://form.amiami.jp/draw20260730\n\n" +
+      "✅プレミアムバンダイ 8/4(火)23:00〆\nhttps://p-bandai.jp/item/item-1000255170/…\n\n" +
+      "✅トレカプラザ55通販店 8/11(火)23:59〆\nhttps://docs.google.com/forms/d/e/1FAIpQLSffABPUyiR62_4WCWrJJs3GI7JPee7B9sC8Eh3qqCR9nSo1YA/viewform…\n\n" +
+      "✅ドラゴンスター 8/11(火)23:59〆\nhttps://dorasuta.membercard.jp/lottery";
+
+    const analysis = await analyzePost(makePost(body, links));
+    expect(analysis.extractedLotteries.length).toBe(5);
+
+    const byStore = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.storeNameRaw, l.applicationUrl]));
+    expect(byStore["iAEONアプリ(九州限定)"]).toBe("https://t.co/Ro4tFRT4Zi");
+    expect(byStore["あみあみ通販"]).toBe("https://t.co/6aUc3OfTD4");
+    expect(byStore["プレミアムバンダイ"]).toBe("https://t.co/NOuldtFB7Y");
+    expect(byStore["トレカプラザ"]).toBe("https://t.co/JYqa4tSE17"); // 店舗名中の数字("55")以降は既存仕様で締切扱いになる（このテストのスコープ外）
+    expect(byStore["ドラゴンスター"]).toBe("https://t.co/7c1a4YI3ld");
+
+    const urls = analysis.extractedLotteries.map((l) => l.applicationUrl);
+    expect(new Set(urls).size).toBe(5);
+  });
 });
