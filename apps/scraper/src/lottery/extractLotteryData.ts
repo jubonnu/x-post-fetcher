@@ -529,6 +529,21 @@ export function splitLotteries(
       const sectionProduct = sectionProductRaw.trim() || null;
       const sectionLines = sectionBody.split(/\n+/);
 
+      // 見出し【】自体が「A/B/C」のように複数商品を「/」区切りで結合したラベルになっている
+      // ケースに対応する。この場合、後続の・行は「店舗の支店」ではなく「その商品のうちの1つ」
+      // であることが多い（例:「【ストームエメラルダ/アビスアイ/...】」→「✅晴れる屋」→
+      // 「・ストームエメラルダ」「・アビスアイ」...）。・行のテキストが見出しのトークンに
+      // 完全一致する場合のみ「商品」として扱い、一致しなければ従来通り「支店」として扱う
+      // （2026-08、sourcePostId=253で確認: 251と同じ内容が別の書式で投稿されており、
+      // 支店として誤って結合済みの見出し全体がproductNameRawになっていた）。
+      const headerTokens = sectionProduct
+        ? sectionProduct
+            .split("/")
+            .map((t) => t.trim())
+            .filter(Boolean)
+        : [];
+      const isMultiProductHeader = headerTokens.length >= 2;
+
       // ✅店舗行の直後に・支店行が並ぶ2階層構造（例:「✅ONEPIECE麦わらストア」→「・渋谷本店」
       // 「・池袋店」...）に対応する。✅行自体は支店を1件以上持てば単独のエントリーにはせず、
       // 各・行を「親の店舗名 + 支店名（storeBranchRaw）」として個別に展開する
@@ -548,10 +563,16 @@ export function splitLotteries(
         if (!LIST_MARKER_PATTERN.test(line)) continue;
 
         if (/^\s*・/.test(line) && pendingParent) {
-          const { store: branch, applicationEnd: branchEnd } = parseStoreAndDeadline(stripListMarker(line));
+          const { store: branchText, applicationEnd: branchEnd } = parseStoreAndDeadline(stripListMarker(line));
           const applicationEnd = branchEnd.precision !== "unknown" ? branchEnd : pendingParent.applicationEnd;
           const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
-          sectionResults.push(make(sectionProduct, pendingParent.store, applicationEnd, perItemUrl?.href, branch));
+          const matchedProductToken = isMultiProductHeader ? headerTokens.find((t) => t === branchText) : undefined;
+
+          if (matchedProductToken) {
+            sectionResults.push(make(matchedProductToken, pendingParent.store, applicationEnd, perItemUrl?.href));
+          } else {
+            sectionResults.push(make(sectionProduct, pendingParent.store, applicationEnd, perItemUrl?.href, branchText));
+          }
           pendingParentHasBranch = true;
           continue;
         }

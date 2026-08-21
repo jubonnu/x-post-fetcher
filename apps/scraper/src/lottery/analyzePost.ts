@@ -25,8 +25,13 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  *     支店を1件以上持てば単独エントリーを作らず、各・行を「親店舗名+storeBranchRaw」として
  *     個別展開する（それまでは✅行が直後の1件目の支店と同じURLを拾い重複行になっていた。
  *     2026-08、sourcePostId=149「受け継がれる意志」で確認）。
+ * 11: 見出し【】自体が「A/B/C」のように複数商品を「/」結合したラベルの場合、後続の・行の
+ *     テキストが見出しのトークンに一致すれば「支店」ではなく「商品」として分割するよう修正
+ *     （10の支店ロジックをそのまま適用すると、・行が実は商品名なのに結合済み見出し全体が
+ *     productNameRawになってしまっていた。2026-08、sourcePostId=253で確認。251と同一内容が
+ *     別の書式で投稿されていたケース）。
  */
-export const PARSER_VERSION = "phase3-rules-10";
+export const PARSER_VERSION = "phase3-rules-11";
 
 interface ComplexitySignals {
   productCount: number;

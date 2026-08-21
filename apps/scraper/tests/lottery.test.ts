@@ -646,4 +646,43 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     expect(a?.storeNameRaw).toBe("単独店舗");
     expect(a?.storeBranchRaw).toBeNull();
   });
+
+  it("回帰確認: 見出し【】が「A/B/C」の結合商品名で、・行がそのうちの1つに一致する場合は支店ではなく商品として分割する（sourcePostId=253、production実データ）", async () => {
+    const links: ExternalLink[] = [
+      { href: "https://t.co/gzMhYwyva4", text: "http://livepocket.jp/e/bpvrn" },
+      { href: "https://t.co/xLUUJ8e96x", text: "http://livepocket.jp/e/frwnn" },
+      { href: "https://t.co/ui65YItxp5", text: "http://livepocket.jp/e/xhtf4" },
+      { href: "https://t.co/tFTRub8vRc", text: "http://livepocket.jp/e/wi88k" },
+      { href: "https://t.co/6WO4v4KmFO", text: "http://livepocket.jp/e/o70fs" },
+      { href: "https://t.co/Vy91Y2hJ0M", text: "http://livepocket.jp/e/jmpwp" },
+    ];
+    const body =
+      "本日告知or開始された抽選まとめ 8/20最新\n\n" +
+      "【ストームエメラルダ/アビスアイ/メガブレイブ/メガシンフォニア/MEGAドリームex/スタデ100】\n" +
+      "✅晴れる屋2秋葉原タワー店 8/24(月)23:59〆\n" +
+      "・ストームエメラルダ\nhttp://livepocket.jp/e/bpvrn\n" +
+      "・アビスアイ\nhttp://livepocket.jp/e/frwnn\n" +
+      "・メガシンフォニア\nhttp://livepocket.jp/e/xhtf4\n" +
+      "・メガブレイブ\nhttp://livepocket.jp/e/wi88k\n" +
+      "・MEGAドリームex\nhttp://livepocket.jp/e/o70fs\n" +
+      "・バトルコレクション\nhttp://livepocket.jp/e/jmpwp";
+
+    const analysis = await analyzePost(makePost(body, links));
+    const byProduct = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.productNameRaw, l]));
+
+    // 見出しのトークンに一致した5件は、結合見出しではなく個別商品名がproductNameRawになり、
+    // storeBranchRawは使わない（支店ではなく商品なので）
+    for (const [product, url] of [
+      ["ストームエメラルダ", "https://t.co/gzMhYwyva4"],
+      ["アビスアイ", "https://t.co/xLUUJ8e96x"],
+      ["メガシンフォニア", "https://t.co/ui65YItxp5"],
+      ["メガブレイブ", "https://t.co/tFTRub8vRc"],
+      ["MEGAドリームex", "https://t.co/6WO4v4KmFO"],
+    ] as const) {
+      expect(byProduct[product], `product=${product}`).toBeDefined();
+      expect(byProduct[product].storeNameRaw).toBe("晴れる屋");
+      expect(byProduct[product].storeBranchRaw).toBeNull();
+      expect(byProduct[product].applicationUrl).toBe(url);
+    }
+  });
 });
