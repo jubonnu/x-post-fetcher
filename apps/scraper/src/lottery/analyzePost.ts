@@ -5,8 +5,15 @@ import { classifyPostUrls } from "./classifyUrls.ts";
 import { classifyEntryPurpose } from "./entryPurpose.ts";
 import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, splitLotteries, stripLabelSections } from "./extractLotteryData.ts";
 
-/** ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される） */
-export const PARSER_VERSION = "phase3-rules-5";
+/**
+ * ルールパーサのバージョン（再解析キー。ロジック改善で上げる → 既存投稿が再解析される）。
+ * 6: applicationUrl決定にallowlist外ドメインのフォールバック（文言近接/店舗公式ドメイン/
+ *    単一URL）を追加（2026-08）。
+ * 7: splitLotteries（複数商品まとめ投稿の分割）で、商品ごとに直後の個別URLを優先して
+ *    割り当てるよう修正（それまでは投稿内の最初のURLを全商品で共有してしまっていた。
+ *    2026-08、sourcePostId=251で確認）。
+ */
+export const PARSER_VERSION = "phase3-rules-7";
 
 interface ComplexitySignals {
   productCount: number;
@@ -93,7 +100,7 @@ export async function analyzePost(post: RawPost): Promise<AnalysisInput> {
   // 複雑/曖昧（複数店舗・複数商品）→ ルールで分割を試みる（Phase 3）。
   // 確実に分割でき（各件に商品と店舗が揃う）→ success。
   if (assessComplexity(post.bodyText)) {
-    const split = splitLotteries(post.bodyText, post.publishedAt, urls);
+    const split = splitLotteries(post.bodyText, post.publishedAt, urls, post.externalLinks);
     if (split && split.length >= 2 && split.every((l) => l.productNameRaw && l.storeNameRaw)) {
       result = { ...base, extractedLotteries: split, analysisStatus: "success" };
     } else if (singleOk && !hasMultipleDistinctItems(post.bodyText)) {

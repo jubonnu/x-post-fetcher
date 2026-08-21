@@ -514,4 +514,40 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     expect(analysis.extractedLotteries[0].applicationUrl).not.toBeNull();
     expect(analysis.extractedLotteries[0].applicationUrl).toBe("https://t.co/wovxq8aCHk");
   });
+
+  it("回帰確認: sourcePostId 251（複数商品まとめ、production実データ）相当のケースで商品ごとに個別のapplicationUrlが割り当てられる（全商品に1件目のURLが誤って共有されていた不具合の修正）", async () => {
+    const links: ExternalLink[] = [
+      { href: "https://t.co/gzMhYwyva4", text: "http://livepocket.jp/e/bpvrn" },
+      { href: "https://t.co/xLUUJ8e96x", text: "http://livepocket.jp/e/frwnn" },
+      { href: "https://t.co/ui65YItxp5", text: "http://livepocket.jp/e/xhtf4" },
+      { href: "https://t.co/tFTRub8vRc", text: "http://livepocket.jp/e/wi88k" },
+      { href: "https://t.co/6WO4v4KmFO", text: "http://livepocket.jp/e/o70fs" },
+      { href: "https://t.co/Vy91Y2hJ0M", text: "http://livepocket.jp/e/jmpwp" },
+    ];
+    const body =
+      "晴れる屋2秋葉原タワー店でストームエメラルダ/アビスアイ/メガブレイブ/メガシンフォニア/MEGAドリームex/スタデ100の抽選開始‼️\n\n" +
+      "【応募期間】\n8月24日(月)23:59〆\n\n【当選発表】\n8月25日(火)予定\n\n【購入期間】\n8月28日(金)～8月30日(日)営業時間中\n\n" +
+      "抽選ページはこちら⬇️\n" +
+      "【MEGA】拡張パック「ストームエメラルダ」\nhttp://livepocket.jp/e/bpvrn\n" +
+      "【MEGA】拡張パック「アビスアイ」\nhttp://livepocket.jp/e/frwnn\n" +
+      "【MEGA】拡張パック「メガシンフォニア」\nhttp://livepocket.jp/e/xhtf4\n" +
+      "【MEGA】拡張パック「メガブレイブ」\nhttp://livepocket.jp/e/wi88k\n" +
+      "【MEGA】ハイクラスパック「MEGAドリームex」\nhttp://livepocket.jp/e/o70fs\n" +
+      "「スタートデッキ100 バトルコレクション」\nhttp://livepocket.jp/e/jmpwp";
+
+    const analysis = await analyzePost(makePost(body, links));
+    expect(analysis.extractedLotteries.length).toBe(6);
+
+    const byProduct = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.productNameRaw, l.applicationUrl]));
+    expect(byProduct["ストームエメラルダ"]).toBe("https://t.co/gzMhYwyva4");
+    expect(byProduct["アビスアイ"]).toBe("https://t.co/xLUUJ8e96x");
+    expect(byProduct["メガシンフォニア"]).toBe("https://t.co/ui65YItxp5");
+    expect(byProduct["メガブレイブ"]).toBe("https://t.co/tFTRub8vRc");
+    expect(byProduct["MEGAドリームex"]).toBe("https://t.co/6WO4v4KmFO");
+    expect(byProduct["スタートデッキ100 バトルコレクション"]).toBe("https://t.co/Vy91Y2hJ0M");
+
+    // 全て異なるURLであること（1件目への集約バグの再発防止）
+    const urls = analysis.extractedLotteries.map((l) => l.applicationUrl);
+    expect(new Set(urls).size).toBe(6);
+  });
 });

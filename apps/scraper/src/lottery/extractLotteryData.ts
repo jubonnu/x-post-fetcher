@@ -1,6 +1,7 @@
 import { resolveDate, resolveDateRange, type ClassifiedUrl, type ExtractedLottery, type ResolvedDate, type ResolvedDateRange } from "@x-post/shared";
 import { detectCardType } from "./classifyPost.ts";
 import { NOT_PUBLISHED_SIGNALS } from "./keywords.ts";
+import type { ExternalLink } from "../scraping/x/parseTweetDom.ts";
 
 /**
  * 複数店舗・複数商品の「まとめ投稿」で、1件ごとの見出しに使われる行頭マーカー。
@@ -226,6 +227,50 @@ function findUrlByStoreDomain(candidates: ClassifiedUrl[], storeNameRaw: string 
   return candidates.find((u) => u.domain === entry.domain) ?? null;
 }
 
+/**
+ * 行が指定リンクの表示テキスト（例: "http://livepocket.jp/e/bpvrn"）を含むか判定する。
+ * ClassifiedUrl（domainのみ保持）ではなく、生のリンクテキスト（パス込み）で照合する。
+ * 同一ドメインの複数URLが並ぶケース（例: livepocket.jpの個別イベントURLが商品ごとに複数）で、
+ * domainだけの判定だと全て同一URLとして扱われてしまうため（2026-08、sourcePostId=251で確認）。
+ * 行末が省略記号（…）で切られている場合は前方一致でも許容する。
+ */
+function lineMatchesLinkText(line: string, linkText: string): boolean {
+  if (!linkText) return false;
+  if (line.includes(linkText)) return true;
+  const truncatedLine = line.trim().replace(/…$/, "");
+  return truncatedLine.length > 0 && (linkText.startsWith(truncatedLine) || truncatedLine.startsWith(linkText));
+}
+
+/**
+ * 「【商品名】\nURL」のように、商品名の直後（同じ行〜2行以内）に個別の応募URLが
+ * 書かれているケースで、その商品専用のURLを探す（複数商品まとめ投稿の商品ごと分割用）。
+ * 見つからなければ null（呼び出し元は投稿全体で共有のapplicationUrlにフォールバックする）。
+ * urlTypeによる絞り込みはしない（livepocket等allowlist一致のURLが商品ごとに複数並ぶケースが
+ * 実データで多いため。2026-08、sourcePostId=251で確認: 6商品それぞれにlivepocket.jpの
+ * 個別URLが振られていたが、ドメインだけで判定すると区別できず全商品に1件目のURLが
+ * 誤って共有されていた）。
+ */
+function findUrlNearProductOccurrence(links: ExternalLink[], lines: string[], productName: string): ExternalLink | null {
+  const candidates = links.filter((l) => l.text);
+  if (candidates.length === 0) return null;
+  // 商品名の裸文字列ではなく「productName」/『productName』の引用符付きで探す。
+  // 冒頭の見出し行（例:「A/B/Cの抽選開始」のように商品名を"/"区切りで列挙するだけの行）にも
+  // 商品名の部分文字列が含まれてしまい、そちらに先に一致して本来のURL隣接行を
+  // 見失うのを防ぐため（2026-08、sourcePostId=251で確認）。
+  const quoted = [`「${productName}」`, `『${productName}』`];
+  for (let i = 0; i < lines.length; i++) {
+    if (!quoted.some((q) => lines[i].includes(q))) continue;
+    for (let offset = 0; offset <= 2; offset++) {
+      const line = lines[i + offset];
+      if (line === undefined) continue;
+      const match = candidates.find((l) => lineMatchesLinkText(line, l.text));
+      if (match) return match;
+    }
+    return null;
+  }
+  return null;
+}
+
 export interface ApplicationUrlResolution {
   applicationUrl: string | null;
   /** 複数のURL候補があり、どれが応募URLか機械的に判別できなかった場合true（呼び出し元はneeds_reviewへ）。 */
@@ -359,7 +404,8 @@ export function extractSingleLottery(
 export function splitLotteries(
   bodyText: string,
   postPublishedAt: string | null,
-  urls: ClassifiedUrl[]
+  urls: ClassifiedUrl[],
+  externalLinks: ExternalLink[] = []
 ): ExtractedLottery[] | null {
   const body = bodyText ?? "";
   // パターン(1)・(2)はラベル節の中身（商品バリエーション列挙・手順説明等）を店舗として
@@ -377,7 +423,12 @@ export function splitLotteries(
   const officialInformationUrl = firstUrlOfType(urls, "official_information");
   const appDownloadUrl = firstUrlOfType(urls, "app_download");
 
-  const make = (product: string | null, store: string | null, applicationEnd: ResolvedDate): ExtractedLottery => ({
+  const make = (
+    product: string | null,
+    store: string | null,
+    applicationEnd: ResolvedDate,
+    applicationUrlOverride?: string | null
+  ): ExtractedLottery => ({
     cardType,
     productNameRaw: product,
     storeNameRaw: store,
@@ -390,7 +441,7 @@ export function splitLotteries(
     purchaseStart: emptyResolved(),
     purchaseDeadline: emptyResolved(),
     confirmedOpenAt: null,
-    applicationUrl,
+    applicationUrl: applicationUrlOverride !== undefined ? applicationUrlOverride : applicationUrl,
     officialInformationUrl,
     appDownloadUrl,
     applicationMethod: null,
@@ -450,7 +501,15 @@ export function splitLotteries(
   const store = extractStoreName(body);
   if (uniqueProducts.length >= 2 && store) {
     const applicationEnd = fieldDate(body, ["応募期間", "締切", "〆", "まで"], postPublishedAt);
-    return uniqueProducts.map((p) => make(p, store, applicationEnd));
+    // 商品ごとに直後（同じ行〜2行以内）に書かれた個別URLを優先して割り当てる。
+    // 見つからなければ投稿全体で共有のapplicationUrl（resolveApplicationUrl側の判定）にフォールバックする
+    // （「商品名の直後に個別の応募URLが列挙されている」投稿で、全商品に同じURLが誤って
+    // 割り当てられてしまっていたため。2026-08、実データ sourcePostId=251 で確認・修正）。
+    const bodyLines = body.split(/\n+/);
+    return uniqueProducts.map((p) => {
+      const perItemUrl = findUrlNearProductOccurrence(externalLinks, bodyLines, p);
+      return make(p, store, applicationEnd, perItemUrl?.href);
+    });
   }
 
   return null;
