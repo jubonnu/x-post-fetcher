@@ -599,4 +599,51 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     const urls = analysis.extractedLotteries.map((l) => l.applicationUrl);
     expect(new Set(urls).size).toBe(5);
   });
+
+  it("回帰確認: ✅店舗→・支店の2階層構造（sourcePostId=149「受け継がれる意志」相当、production実データ）で、親見出し行が重複エントリーを作らず、支店ごとにstoreBranchRaw付きで個別URLが割り当てられる", async () => {
+    const links: ExternalLink[] = [
+      { href: "https://t.co/9qPHa83sha", text: "http://livepocket.jp/e/gy8jb/" },
+      { href: "https://t.co/hmA7v7v2Tp", text: "http://livepocket.jp/e/h8138" },
+      { href: "https://t.co/7J7tnCRvUV", text: "http://livepocket.jp/e/cyy-a" },
+      { href: "https://t.co/yT18gMCJ1R", text: "http://livepocket.jp/e/1ie7v" },
+      { href: "https://t.co/ar1GxqULre", text: "http://livepocket.jp/e/pa4ql" },
+    ];
+    const body =
+      "週末なのでまだ応募できる抽選全てまとめました🙆‍♂️\n\n【受け継がれる意志】\n" +
+      "✅ONEPIECE麦わらストア 8/2(日)23:59〆\n" +
+      "・渋谷本店\nhttp://livepocket.jp/e/gy8jb/\n\n" +
+      "・池袋店\nhttp://livepocket.jp/e/h8138\n\n" +
+      "・あべの店\nhttp://livepocket.jp/e/cyy-a\n\n" +
+      "・梅田店\nhttp://livepocket.jp/e/1ie7v\n\n" +
+      "・福岡店\nhttp://livepocket.jp/e/pa4ql\n\n" +
+      "【神の島の冒険】\n✅ONEPIECE麦わらストア 8/2(日)23:59〆\n・渋谷本店\nhttp://livepocket.jp/e/other1";
+
+    const analysis = await analyzePost(makePost(body, links));
+
+    // 「受け継がれる意志」セクション: 親(✅)自体のエントリーは作られず、支店5件のみ
+    const kokorozashi = analysis.extractedLotteries.filter((l) => l.productNameRaw === "受け継がれる意志");
+    expect(kokorozashi.length).toBe(5);
+    expect(kokorozashi.every((l) => l.storeNameRaw === "ONEPIECE麦わらストア")).toBe(true);
+
+    const byBranch = Object.fromEntries(kokorozashi.map((l) => [l.storeBranchRaw, l.applicationUrl]));
+    expect(byBranch["渋谷本店"]).toBe("https://t.co/9qPHa83sha");
+    expect(byBranch["池袋店"]).toBe("https://t.co/hmA7v7v2Tp");
+    expect(byBranch["あべの店"]).toBe("https://t.co/7J7tnCRvUV");
+    expect(byBranch["梅田店"]).toBe("https://t.co/yT18gMCJ1R");
+    expect(byBranch["福岡店"]).toBe("https://t.co/ar1GxqULre");
+
+    // 全て別々のURLであること（親行が1件目の支店URLと重複しない）
+    const urls = kokorozashi.map((l) => l.applicationUrl);
+    expect(new Set(urls).size).toBe(5);
+  });
+
+  it("✅店舗行に・支店が1件も続かない場合は、従来通り✅行自体を単独の店舗エントリーとする（後方互換）", async () => {
+    const links: ExternalLink[] = [{ href: "https://t.co/single1", text: "http://example.jp/e/abc" }];
+    const body =
+      "抽選まとめ\n\n【商品A】\n✅単独店舗 8/2(日)23:59〆\nhttp://example.jp/e/abc\n\n【商品B】\n✅別の店舗 8/3(月)23:59〆\nhttp://example.jp/e/xyz";
+    const analysis = await analyzePost(makePost(body, links));
+    const a = analysis.extractedLotteries.find((l) => l.productNameRaw === "商品A");
+    expect(a?.storeNameRaw).toBe("単独店舗");
+    expect(a?.storeBranchRaw).toBeNull();
+  });
 });

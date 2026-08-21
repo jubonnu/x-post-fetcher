@@ -20,8 +20,13 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  *    books.rakuten.co.jp/jumpshop-benelic.com/online.ministop.co.jp/iyec.itoyokado.co.jp）。
  *    加えて汎用の抽選代行プラットフォーム（customform.jp/shoplottery.e-starbox.com）を
  *    classifyUrlのallowlistに追加（2026-08）。
+ * 10: splitLotteriesの(0)分岐で、✅店舗行の直後に・支店行が続く2階層構造
+ *     （例:「✅ONEPIECE麦わらストア」→「・渋谷本店」「・池袋店」...）に対応。✅行自体は
+ *     支店を1件以上持てば単独エントリーを作らず、各・行を「親店舗名+storeBranchRaw」として
+ *     個別展開する（それまでは✅行が直後の1件目の支店と同じURLを拾い重複行になっていた。
+ *     2026-08、sourcePostId=149「受け継がれる意志」で確認）。
  */
-export const PARSER_VERSION = "phase3-rules-9";
+export const PARSER_VERSION = "phase3-rules-10";
 
 interface ComplexitySignals {
   productCount: number;

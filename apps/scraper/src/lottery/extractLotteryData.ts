@@ -468,12 +468,13 @@ export function splitLotteries(
     product: string | null,
     store: string | null,
     applicationEnd: ResolvedDate,
-    applicationUrlOverride?: string | null
+    applicationUrlOverride?: string | null,
+    storeBranchRaw: string | null = null
   ): ExtractedLottery => ({
     cardType,
     productNameRaw: product,
     storeNameRaw: store,
-    storeBranchRaw: null,
+    storeBranchRaw,
     region: null,
     applicationStart: emptyResolved(),
     applicationEnd,
@@ -526,12 +527,41 @@ export function splitLotteries(
     const sectionResults: ExtractedLottery[] = [];
     for (const [, sectionProductRaw, sectionBody] of sectionMatches) {
       const sectionProduct = sectionProductRaw.trim() || null;
-      const sectionMarkerLines = sectionBody.split(/\n+/).filter((l) => LIST_MARKER_PATTERN.test(l));
-      for (const line of sectionMarkerLines) {
+      const sectionLines = sectionBody.split(/\n+/);
+
+      // ✅店舗行の直後に・支店行が並ぶ2階層構造（例:「✅ONEPIECE麦わらストア」→「・渋谷本店」
+      // 「・池袋店」...）に対応する。✅行自体は支店を1件以上持てば単独のエントリーにはせず、
+      // 各・行を「親の店舗名 + 支店名（storeBranchRaw）」として個別に展開する
+      // （そうしないと✅行が直後の1件目の支店と同じURLを拾い、見かけ上の重複行になってしまう。
+      // 2026-08、sourcePostId=149で確認）。✅行に支店が1件も続かなければ、従来通りその✅行
+      // 自体を単独の店舗エントリーとして確定する（後方互換）。
+      let pendingParent: { line: string; store: string | null; applicationEnd: ResolvedDate } | null = null;
+      let pendingParentHasBranch = false;
+
+      const flushPendingParentIfStandalone = () => {
+        if (!pendingParent || pendingParentHasBranch) return;
+        const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, pendingParent.line, nextOccurrence(pendingParent.line));
+        sectionResults.push(make(sectionProduct, pendingParent.store, pendingParent.applicationEnd, perItemUrl?.href));
+      };
+
+      for (const line of sectionLines) {
+        if (!LIST_MARKER_PATTERN.test(line)) continue;
+
+        if (/^\s*・/.test(line) && pendingParent) {
+          const { store: branch, applicationEnd: branchEnd } = parseStoreAndDeadline(stripListMarker(line));
+          const applicationEnd = branchEnd.precision !== "unknown" ? branchEnd : pendingParent.applicationEnd;
+          const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
+          sectionResults.push(make(sectionProduct, pendingParent.store, applicationEnd, perItemUrl?.href, branch));
+          pendingParentHasBranch = true;
+          continue;
+        }
+
+        flushPendingParentIfStandalone();
         const { store, applicationEnd } = parseStoreAndDeadline(stripListMarker(line));
-        const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
-        sectionResults.push(make(sectionProduct, store, applicationEnd, perItemUrl?.href));
+        pendingParent = { line, store, applicationEnd };
+        pendingParentHasBranch = false;
       }
+      flushPendingParentIfStandalone();
     }
     if (sectionResults.length >= 2) return sectionResults;
   }
