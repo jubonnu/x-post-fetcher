@@ -7,7 +7,7 @@ import type { ExternalLink } from "../scraping/x/parseTweetDom.ts";
  * 複数店舗・複数商品の「まとめ投稿」で、1件ごとの見出しに使われる行頭マーカー。
  * `assessComplexity`（analyzePost.ts）と`splitLotteries`の両方で同じ判定基準を使うため、
  * ここで一元管理する（ズレると「複数と判定されたのに分割パターンが拾えない」不整合が起きる）。
- * 対応: ✅/✔/・ の記号、丸数字（①〜⑳）、キーキャップ絵文字（1️⃣〜9️⃣・🔟）、
+ * 対応: ✅/✔/・/･ の記号、丸数字（①〜⑳）、キーキャップ絵文字（1️⃣〜9️⃣・🔟）、
  * 半角/全角の番号リスト（1. / １．）。
  *
  * 「▼/■/★」は含めない: 実データで、1つの抽選（例:「✅ジャンプショップ」）の下に
@@ -15,7 +15,15 @@ import type { ExternalLink } from "../scraping/x/parseTweetDom.ts";
  * 列挙するケースがあり、これをトップレベルの区切りマーカーとして扱うと1件の抽選が
  * 店舗数だけ誤って分割されてしまう（2026-08、実データで確認・修正）。
  */
-export const LIST_MARKER_PATTERN = /^\s*(?:[✅✔・]|[①-⑳]|[0-9]️?⃣|\u{1F51F}|\d+[.．]|[０-９]+[.．])/u;
+export const LIST_MARKER_PATTERN = /^\s*(?:[✅✔・･]|[①-⑳]|[0-9]️?⃣|\u{1F51F}|\d+[.．]|[０-９]+[.．])/u;
+
+/**
+ * ✅店舗行の直後に並ぶ「・支店/商品」行頭マーカー。全角中点「・」と半角カナ中点「･」の
+ * どちらも同じ意味で使われるため両方を対象にする（2026-08、sourcePostId=172で確認:
+ * 半角の「･」だけが未対応で、支店/商品への分割が行われず1件の結合エントリーに
+ * まとまってしまっていた）。
+ */
+const BRANCH_LINE_PATTERN = /^\s*[・･]/;
 
 /** 行頭のマーカーを取り除いた残り部分を返す。 */
 export function stripListMarker(line: string): string {
@@ -563,7 +571,7 @@ export function splitLotteries(
       // （2026-08、sourcePostId=267で確認。従来ロジックだと1行目の商品が消え、2件目以降も
       // 見出しラベル＝商品名・1行目の商品名＝店舗名、という入れ替わったデータになっていた）。
       const sectionMarkerLines = sectionLines.filter((l) => LIST_MARKER_PATTERN.test(l));
-      const hasStoreMarker = sectionMarkerLines.some((l) => !/^\s*・/.test(l));
+      const hasStoreMarker = sectionMarkerLines.some((l) => !BRANCH_LINE_PATTERN.test(l));
       if (!hasStoreMarker && sectionMarkerLines.length > 0) {
         const commonStore = extractStoreName(body);
         const leadingLine = sectionLines.find((l) => l.trim() && !LIST_MARKER_PATTERN.test(l)) ?? "";
@@ -594,8 +602,14 @@ export function splitLotteries(
       for (const line of sectionLines) {
         if (!LIST_MARKER_PATTERN.test(line)) continue;
 
-        if (/^\s*・/.test(line) && pendingParent) {
-          const { store: branchText, applicationEnd: branchEnd } = parseStoreAndDeadline(stripListMarker(line));
+        if (BRANCH_LINE_PATTERN.test(line) && pendingParent) {
+          const strippedBranchLine = stripListMarker(line);
+          const { store: branchTextCandidate, applicationEnd: branchEnd } = parseStoreAndDeadline(strippedBranchLine);
+          // ・行に実際の日付が続かない場合（大半のケース）、parseStoreAndDeadlineの
+          // 数字/「/」区切りをそのまま採用しない。「スタデ100」「メガブレイブ/メガシンフォニア」
+          // のように商品名自体に数字や「/」を含むケースで、日付欄と誤認して商品名の後半が
+          // 切り捨てられてしまっていたため（2026-08、sourcePostId=172で確認）。
+          const branchText = branchEnd.precision !== "unknown" ? branchTextCandidate : strippedBranchLine;
           const applicationEnd = branchEnd.precision !== "unknown" ? branchEnd : pendingParent.applicationEnd;
           const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
           const matchedProductToken = isMultiProductHeader

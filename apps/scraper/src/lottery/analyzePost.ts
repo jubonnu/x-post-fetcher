@@ -43,8 +43,16 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  *     見出し「プレミアムデッキセットエーフィ・ブラッキー」と・行「プレミアムデッキセット
  *     エーフィ･ブラッキー」のような差だけで不一致になり、支店として誤って扱われていた
  *     （2026-08、sourcePostId=261で確認）。
+ * 14: (a) LIST_MARKER_PATTERN（行頭マーカー判定）が全角中点「・」のみ対応しており、実データで
+ *     頻出する半角カナ中点「･」の・行が一切マーカーとして認識されず、✅店舗行の支店/商品分割が
+ *     丸ごとスキップされ1件の結合エントリーにまとまってしまっていた（2026-08、sourcePostId=172で
+ *     確認。同時期の投稿12件がこのパターンの影響を受けていた）。
+ *     (b) ・行の支店/商品名パース（parseStoreAndDeadline流用）が、日付が実際には続かない場合でも
+ *     数字/「/」区切りを機械的に適用してしまい、「スタデ100」「メガブレイブ/メガシンフォニア」の
+ *     ような商品名自体に数字や「/」を含むケースで名前の後半が切り捨てられていた
+ *     （2026-08、sourcePostId=172で確認）。
  */
-export const PARSER_VERSION = "phase3-rules-13";
+export const PARSER_VERSION = "phase3-rules-14";
 
 interface ComplexitySignals {
   productCount: number;

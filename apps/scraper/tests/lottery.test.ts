@@ -763,4 +763,57 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     expect(byProduct["プレミアムデッキセットエーフィ・ブラッキー"].storeBranchRaw).toBeNull();
     expect(byProduct["プレミアムデッキセットエーフィ・ブラッキー"].applicationUrl).toBe("https://t.co/b2");
   });
+
+  it("回帰確認: 半角カナ中点「･」の・行もマーカーとして認識し、支店/商品ごとに分割する（sourcePostId=172）", async () => {
+    // 全角「・」のみ対応で半角「･」が未対応だったため、✅行の直後に「･」で始まる行が並んでも
+    // 一切分割されず、1件の結合エントリーになってしまっていた。
+    const links: ExternalLink[] = [
+      { href: "https://t.co/c1", text: "https://shoplottery.e-starbox.com/lottery/entry?code=HQT8z9qtMg" },
+      { href: "https://t.co/c2", text: "https://shoplottery.e-starbox.com/lottery/entry?code=ON4G0nRMZm" },
+    ];
+    const body =
+      "本日開始された抽選まとめ\n\n" +
+      "【30th CELEBRATION/エーフィ&ブラッキー】\n" +
+      "✅カードボックス津店 8/16(日)22:00〆\n" +
+      "･30th CELEBRATION\nhttps://shoplottery.e-starbox.com/lottery/entry?code=HQT8z9qtMg\n" +
+      "･エーフィ&ブラッキー\nhttps://shoplottery.e-starbox.com/lottery/entry?code=ON4G0nRMZm";
+
+    const analysis = await analyzePost(makePost(body, links));
+    expect(analysis.extractedLotteries).toHaveLength(2);
+    const byProduct = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.productNameRaw, l]));
+    expect(byProduct["30th CELEBRATION"]).toBeDefined();
+    expect(byProduct["30th CELEBRATION"].storeNameRaw).toBe("カードボックス津店");
+    expect(byProduct["30th CELEBRATION"].applicationUrl).toBe("https://t.co/c1");
+  });
+
+  it("回帰確認: ・行の商品名に数字や「/」が含まれていても、日付が続かない限り切り捨てない（sourcePostId=172）", async () => {
+    // parseStoreAndDeadlineの数字/「/」区切りをそのまま流用すると、「スタデ100」が「スタデ」に、
+    // 「メガブレイブ/メガシンフォニア」が「メガブレイブ」に切り捨てられ、後半が消失していた。
+    const links: ExternalLink[] = [
+      { href: "https://t.co/d1", text: "https://shoplottery.e-starbox.com/lottery/entry?code=aaa" },
+      { href: "https://t.co/d2", text: "https://shoplottery.e-starbox.com/lottery/entry?code=bbb" },
+      { href: "https://t.co/d3", text: "https://shoplottery.e-starbox.com/lottery/entry?code=ccc" },
+    ];
+    const body =
+      "本日開始された抽選まとめ\n\n" +
+      "【ストームエメラルダ/メガブレイブ/メガシンフォニア/スタデ100】\n" +
+      "✅カードボックス京都店 8/6(木)22:00〆\n" +
+      "･ストームエメラルダ\nhttps://shoplottery.e-starbox.com/lottery/entry?code=aaa\n" +
+      "･メガブレイブ/メガシンフォニア\nhttps://shoplottery.e-starbox.com/lottery/entry?code=bbb\n" +
+      "･スタデ100\nhttps://shoplottery.e-starbox.com/lottery/entry?code=ccc";
+
+    const analysis = await analyzePost(makePost(body, links));
+    const byProduct = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.productNameRaw, l]));
+
+    // 見出しトークンに完全一致する「ストームエメラルダ」「スタデ100」は商品として分割される
+    expect(byProduct["ストームエメラルダ"]).toBeDefined();
+    expect(byProduct["ストームエメラルダ"].storeNameRaw).toBe("カードボックス京都店");
+    expect(byProduct["スタデ100"]).toBeDefined();
+    expect(byProduct["スタデ100"].storeNameRaw).toBe("カードボックス京都店");
+
+    // 「メガブレイブ/メガシンフォニア」はどの単一トークンにも一致しないため支店フォールバックになるが、
+    // 全文（切り捨てずに）storeBranchRawへ保持される
+    const fallback = analysis.extractedLotteries.find((l) => l.storeBranchRaw === "メガブレイブ/メガシンフォニア");
+    expect(fallback).toBeDefined();
+  });
 });
