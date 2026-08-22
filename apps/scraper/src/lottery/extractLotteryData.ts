@@ -55,6 +55,17 @@ function isSectionLabel(header: string): boolean {
 }
 
 /**
+ * 結合見出しのトークンと・行テキストの一致判定用に、表記揺れを吸収して正規化する。
+ * 空白（全角/半角）を除去し、全角中点「・」と半角カナ中点「･」を統一する
+ * （2026-08、sourcePostId=261で確認: 見出し「プレミアムデッキセットエーフィ・ブラッキー」と
+ * ・行「プレミアムデッキセット エーフィ･ブラッキー」が、スペースと中点の全角/半角差だけで
+ * 完全一致せず、本来は商品なのに支店として誤って扱われていた）。
+ */
+function normalizeForTokenMatch(s: string | null): string {
+  return (s ?? "").replace(/[\s\u3000]+/g, "").replace(/[・･]/g, "・");
+}
+
+/**
  * 【応募期間】【手順】のようなフィールドラベルの節の中身を本文から取り除く。
  * ラベル節の中にも「・」や丸数字の箇条書きが含まれることがあり、これを除去せずに
  * マーカー行を数える/分割すると、ラベル節の中身（商品バリエーションの列挙・手順の説明等）を
@@ -533,7 +544,7 @@ export function splitLotteries(
       // ケースに対応する。この場合、後続の・行は「店舗の支店」ではなく「その商品のうちの1つ」
       // であることが多い（例:「【ストームエメラルダ/アビスアイ/...】」→「✅晴れる屋」→
       // 「・ストームエメラルダ」「・アビスアイ」...）。・行のテキストが見出しのトークンに
-      // 完全一致する場合のみ「商品」として扱い、一致しなければ従来通り「支店」として扱う
+      // 一致する場合のみ「商品」として扱い、一致しなければ従来通り「支店」として扱う
       // （2026-08、sourcePostId=253で確認: 251と同じ内容が別の書式で投稿されており、
       // 支店として誤って結合済みの見出し全体がproductNameRawになっていた）。
       const headerTokens = sectionProduct
@@ -587,7 +598,9 @@ export function splitLotteries(
           const { store: branchText, applicationEnd: branchEnd } = parseStoreAndDeadline(stripListMarker(line));
           const applicationEnd = branchEnd.precision !== "unknown" ? branchEnd : pendingParent.applicationEnd;
           const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
-          const matchedProductToken = isMultiProductHeader ? headerTokens.find((t) => t === branchText) : undefined;
+          const matchedProductToken = isMultiProductHeader
+            ? headerTokens.find((t) => normalizeForTokenMatch(t) === normalizeForTokenMatch(branchText))
+            : undefined;
 
           if (matchedProductToken) {
             sectionResults.push(make(matchedProductToken, pendingParent.store, applicationEnd, perItemUrl?.href));

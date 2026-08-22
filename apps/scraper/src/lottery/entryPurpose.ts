@@ -10,6 +10,10 @@ const SUMMARY_ENTRY_KEYWORDS = ["抽選まとめ", "抽選全てまとめ", "全
 const NEW_LOTTERY_ENTRY_KEYWORDS = ["抽選開始", "抽選告知", "抽選受付"].map(normalize);
 const NEW_LOTTERY_MARKER = normalize("抽選");
 const START_MARKER = normalize("スタート");
+/** 締切マーカー「〆」。価格情報ダイジェスト投稿（「トレカ情報まとめ」等）はこの記号を一切
+ * 使わないため、店舗・締切を列挙した抽選まとめ投稿だけを安全に判別できる（下記参照）。 */
+const DEADLINE_MARKER = "〆";
+const MIN_DEADLINE_MARKERS_FOR_SUMMARY = 2;
 
 /**
  * 投稿本文を目的別（new_lottery/summary/result/ignored）に分類する、抽出とは独立した
@@ -30,6 +34,12 @@ export function classifyEntryPurpose(bodyText: string): EntryPurpose {
   // 「スタート」単体では判定しない。「抽選」と「スタート」を両方含む場合のみ new_lottery とする
   // （2026-08実データ「...抽選企画がスタートしました」等、"抽選開始"の表記揺れに対応するため）。
   if (norm.includes(NEW_LOTTERY_MARKER) && norm.includes(START_MARKER)) return "new_lottery";
+  // 「抽選」を含み、締切マーカー「〆」が複数あれば、上記どのキーワードにも一致しない言い回しでも
+  // 店舗・締切を列挙した抽選まとめ投稿とみなす（2026-08、sourcePostId=261で確認: 「今週開始した
+  // 抽選増えたのでまとめておきました」という言い回しがどのキーワードにも一致せず、20件近い
+  // 抽選情報が丸ごと抽出されずに失われていた）。
+  const deadlineMarkerCount = norm.split(DEADLINE_MARKER).length - 1;
+  if (norm.includes(NEW_LOTTERY_MARKER) && deadlineMarkerCount >= MIN_DEADLINE_MARKERS_FOR_SUMMARY) return "summary";
 
   return "ignored";
 }

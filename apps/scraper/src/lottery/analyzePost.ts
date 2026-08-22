@@ -35,8 +35,16 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  *     共通で取る投稿）に対応。10の支店ロジックが誤って1行目の商品を店舗扱い・消失させ、
  *     2件目以降も見出しラベル＝商品名・1行目の商品名＝店舗名という入れ替わったデータを
  *     生成していた（2026-08、sourcePostId=267で確認）。
+ * 13: (a) classifyEntryPurpose（抽出に進めるかの絞り込みゲート）に、「抽選」＋締切マーカー「〆」が
+ *     複数あれば summary とみなすフォールバックを追加。「今週開始した抽選増えたのでまとめて
+ *     おきました」のような、既存キーワード（抽選まとめ/抽選開始等）のどれにも一致しない言い回しで
+ *     20件近い抽選情報が丸ごと抽出されずに失われていた（2026-08、sourcePostId=261で確認）。
+ *     (b) 11の結合見出しトークン一致判定を表記揺れに強くした（空白・全角/半角中点の差を無視）。
+ *     見出し「プレミアムデッキセットエーフィ・ブラッキー」と・行「プレミアムデッキセット
+ *     エーフィ･ブラッキー」のような差だけで不一致になり、支店として誤って扱われていた
+ *     （2026-08、sourcePostId=261で確認）。
  */
-export const PARSER_VERSION = "phase3-rules-12";
+export const PARSER_VERSION = "phase3-rules-13";
 
 interface ComplexitySignals {
   productCount: number;

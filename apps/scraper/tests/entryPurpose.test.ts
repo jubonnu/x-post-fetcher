@@ -58,4 +58,25 @@ describe("classifyEntryPurpose", () => {
   it("優先順位: summary と new_lottery の両方に該当する場合は summary を優先する", () => {
     expect(classifyEntryPurpose("抽選まとめ、および抽選開始のお知らせ")).toBe("summary");
   });
+
+  it("実データ回帰: どのキーワードにも一致しない言い回しでも「抽選」＋締切マーカー「〆」が複数あれば summary（sourcePostId=261）", () => {
+    // 「今週開始した抽選増えたのでまとめておきました」はSUMMARY_ENTRY_KEYWORDSのどれにも一致せず、
+    // 20件近い抽選情報（✅店舗+日付〆+URL）が丸ごと抽出されずに失われていた。
+    const body =
+      "今週開始した抽選増えたのでまとめておきました💁‍♂️\n\n" +
+      "【30th CELEBRATION】\n✅ヤマダ電機 8/19(水)23:59〆\nhttps://example.com\n\n" +
+      "✅イオンスタイルオンライン 8/20(木)23:59〆\nhttps://example.com";
+    expect(classifyEntryPurpose(body)).toBe("summary");
+  });
+
+  it("「抽選」を含んでいても締切マーカー「〆」が1件以下なら ignored のまま（価格ダイジェスト投稿の誤判定防止）", () => {
+    // 「トレカ情報まとめ ザビニュース」形式の投稿は「抽選結果が発表される」等、稀に「抽選」を含むが
+    // 締切〆は使わないため、summaryへ誤って昇格させない（2026-08、sourcePostId=263で確認）。
+    const body =
+      "8/21(金)トレカ情報まとめ ザビニュース📺\n\n" +
+      "✅30th CELEBRATION関連 ポケセンオンラインで抽選結果が発表される‼️\n\n" +
+      "✅メガダークライex SAR PSA10 57,000円台まで下がる\n\n" +
+      "✅明日発売 世界最強の戦士 現在20,000円前後で取引中‼️";
+    expect(classifyEntryPurpose(body)).toBe("ignored");
+  });
 });

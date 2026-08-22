@@ -733,4 +733,34 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     }
     expect(analysis.extractedLotteries).toHaveLength(9);
   });
+
+  it("回帰確認: 結合見出しトークンと・行テキストがスペース/全角半角中点の差だけで不一致でも商品として分割する（sourcePostId=261）", async () => {
+    // 見出し「プレミアムデッキセットエーフィ・ブラッキー」（スペース無し・全角中点）と
+    // ・行「プレミアムデッキセット エーフィ･ブラッキー」（スペース有り・半角カナ中点）が
+    // 完全一致せず、本来は商品なのに支店として扱われ、productNameRawが結合見出し全体に
+    // なってしまっていた。
+    const links: ExternalLink[] = [
+      { href: "https://t.co/b1", text: "https://aeonretail.com/Page/k-lottery_sale.aspx" },
+      { href: "https://t.co/b2", text: "https://aeonretail.com/Page/k-lottery_pokemon.aspx" },
+    ];
+    const body =
+      "本日開始された抽選まとめ\n\n" +
+      "【30th CELEBRATION/プレミアムデッキセットエーフィ・ブラッキー】\n" +
+      "✅イオンスタイルオンライン 8/20(木)23:59〆\n" +
+      "・30th CELEBRATION\nhttps://aeonretail.com/Page/k-lottery_sale.aspx\n" +
+      "・プレミアムデッキセット エーフィ･ブラッキー\nhttps://aeonretail.com/Page/k-lottery_pokemon.aspx";
+
+    const analysis = await analyzePost(makePost(body, links));
+    const byProduct = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.productNameRaw, l]));
+
+    expect(byProduct["30th CELEBRATION"]).toBeDefined();
+    expect(byProduct["30th CELEBRATION"].storeNameRaw).toBe("イオンスタイルオンライン");
+    expect(byProduct["30th CELEBRATION"].storeBranchRaw).toBeNull();
+
+    // productNameRawには見出し側のトークン表記（スペース無し・全角中点）が採用される
+    expect(byProduct["プレミアムデッキセットエーフィ・ブラッキー"]).toBeDefined();
+    expect(byProduct["プレミアムデッキセットエーフィ・ブラッキー"].storeNameRaw).toBe("イオンスタイルオンライン");
+    expect(byProduct["プレミアムデッキセットエーフィ・ブラッキー"].storeBranchRaw).toBeNull();
+    expect(byProduct["プレミアムデッキセットエーフィ・ブラッキー"].applicationUrl).toBe("https://t.co/b2");
+  });
 });
