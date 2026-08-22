@@ -514,8 +514,12 @@ export function splitLotteries(
   });
 
   // 行から店舗名と（あれば）締切日付を取り出す（(0)(1)で共通利用）。
+  // 分割トリガーは数字のみとする（「/」を含めない）。「エディオン/トレカキャピタル」のように
+  // 店舗名自体に「/」を含む場合、「/」をトリガーにすると日付より前の「/」で誤って
+  // 分割され、店舗名の後半（トレカキャピタル）が丸ごと消えてしまっていた
+  // （2026-08、sourcePostId=232で確認）。
   const parseStoreAndDeadline = (line: string): { store: string | null; applicationEnd: ResolvedDate } => {
-    const m = line.match(/^([^\d]+?)\s*([\d/].*)?$/);
+    const m = line.match(/^([^\d]+?)\s*(\d.*)?$/);
     const store = (m ? m[1] : line).trim() || null;
     const dateText = m && m[2] ? m[2] : null;
     return { store, applicationEnd: dateText ? resolveDate(dateText, postPublishedAt) : emptyResolved() };
@@ -626,7 +630,11 @@ export function splitLotteries(
         }
 
         flushPendingParentIfStandalone();
-        const { store, applicationEnd } = parseStoreAndDeadline(stripListMarker(line));
+        const strippedParentLine = stripListMarker(line);
+        const { store: parentStoreCandidate, applicationEnd } = parseStoreAndDeadline(strippedParentLine);
+        // ・行と同様、実際の日付が見つからない場合は切り捨てず全文を店舗名として採用する
+        // （店舗名自体に数字を含むケースへの安全策。2026-08、sourcePostId=232で確認）。
+        const store = applicationEnd.precision !== "unknown" ? parentStoreCandidate : strippedParentLine;
         pendingParent = { line, store, applicationEnd };
         pendingParentHasBranch = false;
       }

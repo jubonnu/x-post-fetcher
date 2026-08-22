@@ -816,4 +816,26 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
     const fallback = analysis.extractedLotteries.find((l) => l.storeBranchRaw === "メガブレイブ/メガシンフォニア");
     expect(fallback).toBeDefined();
   });
+
+  it("回帰確認: ✅行の店舗名自体に「/」が含まれる場合、日付より前の「/」で切り捨てない（sourcePostId=232）", async () => {
+    // 「✅エディオン/トレカキャピタル 8/16(日)23:59〆」で、日付前の「/」を分割トリガーにすると
+    // 店舗名が「エディオン」だけに切り捨てられ「トレカキャピタル」が消えていた。
+    const links: ExternalLink[] = [
+      { href: "https://t.co/e1", text: "https://edion-cp.com/pokeca082801" },
+      { href: "https://t.co/e2", text: "https://edion-cp.com/pokeca082802" },
+    ];
+    const body =
+      "本日開始された抽選まとめ\n\n" +
+      "【ストームエメラルダ/メガブレイブ/メガシンフォニア/スタデ100】\n" +
+      "✅エディオン/トレカキャピタル 8/16(日)23:59〆\n" +
+      "(どちらか片方の応募にしないと落選になる)\n" +
+      "・エディオン\nhttps://edion-cp.com/pokeca082801\n" +
+      "・トレカキャピタル\nhttps://edion-cp.com/pokeca082802";
+
+    const analysis = await analyzePost(makePost(body, links));
+    const stores = analysis.extractedLotteries.map((l) => l.storeNameRaw);
+    expect(stores.every((s) => s === "エディオン/トレカキャピタル")).toBe(true);
+    const branches = analysis.extractedLotteries.map((l) => l.storeBranchRaw).sort();
+    expect(branches).toEqual(["エディオン", "トレカキャピタル"]);
+  });
 });

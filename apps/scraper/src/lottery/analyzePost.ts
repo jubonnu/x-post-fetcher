@@ -51,8 +51,13 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  *     数字/「/」区切りを機械的に適用してしまい、「スタデ100」「メガブレイブ/メガシンフォニア」の
  *     ような商品名自体に数字や「/」を含むケースで名前の後半が切り捨てられていた
  *     （2026-08、sourcePostId=172で確認）。
+ * 15: parseStoreAndDeadlineの分割トリガーから「/」を外し、数字のみに限定した。「✅エディオン/
+ *     トレカキャピタル 8/16(日)〆」のように✅行の店舗名自体に「/」を含む場合、日付より前の
+ *     「/」で誤って分割され店舗名の後半が丸ごと消えていた（2026-08、sourcePostId=232で確認）。
+ *     ✅行の店舗名パースにも、・行と同様に「実際の日付が見つからない場合は切り捨てない」
+ *     安全策を追加した。
  */
-export const PARSER_VERSION = "phase3-rules-14";
+export const PARSER_VERSION = "phase3-rules-15";
 
 interface ComplexitySignals {
   productCount: number;
