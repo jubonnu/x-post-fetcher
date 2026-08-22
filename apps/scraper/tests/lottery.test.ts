@@ -685,4 +685,52 @@ describe("resolveApplicationUrl（応募URL決定の優先順位）", () => {
       expect(byProduct[product].applicationUrl).toBe(url);
     }
   });
+
+  it("回帰確認: 見出し【】が締切ラベル（【応募締切】）で✅店舗マーカーが無く・行だけが並ぶ場合、各行を商品として分割し店舗は冒頭の共通店舗を使う（sourcePostId=267、production実データ）", async () => {
+    const links: ExternalLink[] = [
+      { href: "https://t.co/a1", text: "https://livepocket.jp/e/a537p" },
+      { href: "https://t.co/a2", text: "https://livepocket.jp/e/z-g5a" },
+      { href: "https://t.co/a3", text: "https://livepocket.jp/e/f3e5r" },
+      { href: "https://t.co/a4", text: "https://livepocket.jp/e/p-di7" },
+      { href: "https://t.co/a5", text: "https://livepocket.jp/e/qt17n" },
+      { href: "https://t.co/a6", text: "https://livepocket.jp/e/7egxr" },
+      { href: "https://t.co/a7", text: "https://livepocket.jp/e/tz5fu" },
+      { href: "https://t.co/a8", text: "https://livepocket.jp/e/dbecp" },
+      { href: "https://t.co/a9", text: "https://livepocket.jp/e/cn_pn" },
+    ];
+    const body =
+      "キデイランドららぽーと富士見で各商品抽選開始されました‼️\n\n" +
+      "【応募締切】 8月24日(月)23:59〆\n\n" +
+      "・ストームエメラルダ\nhttps://livepocket.jp/e/a537p\n\n" +
+      "・世界最強の戦士\nhttps://livepocket.jp/e/z-g5a\n\n" +
+      "・メガブレイブ\nhttps://livepocket.jp/e/f3e5r\n\n" +
+      "・メガシンフォニア\nhttps://livepocket.jp/e/p-di7\n\n" +
+      "・スタートデッキ100バトルコレクション\nhttps://livepocket.jp/e/qt17n\n\n" +
+      "・DUAL EVOLUTION\nhttps://livepocket.jp/e/7egxr\n\n" +
+      "・バトルオブサイヤン\nhttps://livepocket.jp/e/tz5fu\n\n" +
+      "・スターターセット「イーブイ」\nhttps://livepocket.jp/e/dbecp\n\n" +
+      "・スターターセットセット「ニャオハ」\nhttps://livepocket.jp/e/cn_pn";
+
+    const analysis = await analyzePost(makePost(body, links));
+    const byProduct = Object.fromEntries(analysis.extractedLotteries.map((l) => [l.productNameRaw, l]));
+
+    for (const [product, url] of [
+      ["ストームエメラルダ", "https://t.co/a1"],
+      ["世界最強の戦士", "https://t.co/a2"],
+      ["メガブレイブ", "https://t.co/a3"],
+      ["メガシンフォニア", "https://t.co/a4"],
+      ["スタートデッキ100バトルコレクション", "https://t.co/a5"],
+      ["DUAL EVOLUTION", "https://t.co/a6"],
+      ["バトルオブサイヤン", "https://t.co/a7"],
+      ["スターターセット「イーブイ」", "https://t.co/a8"],
+      ["スターターセットセット「ニャオハ」", "https://t.co/a9"],
+    ] as const) {
+      expect(byProduct[product], `product=${product}`).toBeDefined();
+      expect(byProduct[product].storeNameRaw).toBe("キデイランドららぽーと富士見");
+      expect(byProduct[product].storeBranchRaw).toBeNull();
+      expect(byProduct[product].applicationEnd.date).toBe("2026-08-24");
+      expect(byProduct[product].applicationUrl).toBe(url);
+    }
+    expect(analysis.extractedLotteries).toHaveLength(9);
+  });
 });

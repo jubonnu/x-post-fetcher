@@ -30,8 +30,13 @@ import { extractSingleLottery, LIST_MARKER_PATTERN, resolveApplicationUrl, split
  *     （10の支店ロジックをそのまま適用すると、・行が実は商品名なのに結合済み見出し全体が
  *     productNameRawになってしまっていた。2026-08、sourcePostId=253で確認。251と同一内容が
  *     別の書式で投稿されていたケース）。
+ * 12: 【】見出しの下に✅店舗マーカーが1件も無く・行だけが並ぶ「フラットな商品リスト」形式
+ *     （見出し自体が「【応募締切】」のような締切ラベルで、店舗は投稿冒頭の「<店舗>で...」から
+ *     共通で取る投稿）に対応。10の支店ロジックが誤って1行目の商品を店舗扱い・消失させ、
+ *     2件目以降も見出しラベル＝商品名・1行目の商品名＝店舗名という入れ替わったデータを
+ *     生成していた（2026-08、sourcePostId=267で確認）。
  */
-export const PARSER_VERSION = "phase3-rules-11";
+export const PARSER_VERSION = "phase3-rules-12";
 
 interface ComplexitySignals {
   productCount: number;

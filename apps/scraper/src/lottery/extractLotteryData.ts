@@ -544,6 +544,27 @@ export function splitLotteries(
         : [];
       const isMultiProductHeader = headerTokens.length >= 2;
 
+      // セクション内に✅（店舗）マーカーが1つも無く、・行だけが並ぶ「フラットな商品リスト」に
+      // 対応する。見出し【】が実際には商品名ではなく締切等のラベルとして使われ（例:
+      // 「【応募締切】8月24日〆」）、その下に「・商品名\nURL」が店舗マーカー無しで列挙される
+      // 投稿形式（店舗は冒頭の「<店舗>で...」から共通で取る）。✅が無い＝各・行を「店舗の支店」
+      // として扱う根拠が無いため、代わりに各・行そのものを商品として扱う
+      // （2026-08、sourcePostId=267で確認。従来ロジックだと1行目の商品が消え、2件目以降も
+      // 見出しラベル＝商品名・1行目の商品名＝店舗名、という入れ替わったデータになっていた）。
+      const sectionMarkerLines = sectionLines.filter((l) => LIST_MARKER_PATTERN.test(l));
+      const hasStoreMarker = sectionMarkerLines.some((l) => !/^\s*・/.test(l));
+      if (!hasStoreMarker && sectionMarkerLines.length > 0) {
+        const commonStore = extractStoreName(body);
+        const leadingLine = sectionLines.find((l) => l.trim() && !LIST_MARKER_PATTERN.test(l)) ?? "";
+        const sectionApplicationEnd = resolveDate(leadingLine, postPublishedAt);
+        for (const line of sectionMarkerLines) {
+          const productText = stripListMarker(line).trim() || null;
+          const perItemUrl = findUrlAfterExactLine(externalLinks, fullBodyLines, line, nextOccurrence(line));
+          sectionResults.push(make(productText, commonStore, sectionApplicationEnd, perItemUrl?.href));
+        }
+        continue;
+      }
+
       // ✅店舗行の直後に・支店行が並ぶ2階層構造（例:「✅ONEPIECE麦わらストア」→「・渋谷本店」
       // 「・池袋店」...）に対応する。✅行自体は支店を1件以上持てば単独のエントリーにはせず、
       // 各・行を「親の店舗名 + 支店名（storeBranchRaw）」として個別に展開する
