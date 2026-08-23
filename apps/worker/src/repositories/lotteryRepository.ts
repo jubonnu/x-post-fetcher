@@ -819,7 +819,9 @@ export async function listLotteriesForAdmin(db: DbOrTx, opts: ListLotteriesForAd
       .from(lotteries)
       .leftJoin(sourcePosts, eq(sourcePosts.id, lotteries.sourcePostId))
       .where(where)
-      .orderBy(desc(lotteries.createdAt))
+      // X投稿日時が新しい順（NULLはSQLiteの既定挙動で最小値扱いのため自然に末尾へ）。
+      // 同一投稿由来（複数商品まとめ投稿の分割）で日時が同じ場合はid降順で安定させる。
+      .orderBy(desc(sourcePosts.publishedAt), desc(lotteries.id))
       .limit(Math.min(limit, 100))
       .offset(offset),
     db

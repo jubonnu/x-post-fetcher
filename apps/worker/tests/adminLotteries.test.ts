@@ -90,6 +90,25 @@ describe("GET /admin/lotteries", () => {
     expect(item?.sourcePostPublishedAt ?? null).toBeNull();
   });
 
+  it("X投稿日時（sourcePostPublishedAt）が新しい順に並ぶ（DB登録順ではなく）", async () => {
+    const uniq = `並び順テスト-${Date.now()}`;
+    const oldPostId = await insertSourcePost({ publishedAt: "2026-08-01T00:00:00.000Z" });
+    const newPostId = await insertSourcePost({ publishedAt: "2026-08-20T00:00:00.000Z" });
+    // 先に古い投稿由来の抽選をDBへ入れ、後から新しい投稿由来を入れる
+    // （createdAt順だと逆になってしまうことの回帰テスト）。
+    const oldId = await insertLottery({ productNameRaw: `${uniq}-古い投稿`, sourcePostId: oldPostId });
+    const newId = await insertLottery({ productNameRaw: `${uniq}-新しい投稿`, sourcePostId: newPostId });
+    const noDateId = await insertLottery({ productNameRaw: `${uniq}-投稿日時なし`, sourcePostId: null });
+
+    const res = await app.request(`/admin/lotteries?search=${encodeURIComponent(uniq)}`, { headers: authHeaders() });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { items: { id: number }[] };
+    const order = body.items.map((i) => i.id);
+    expect(order.indexOf(newId)).toBeLessThan(order.indexOf(oldId));
+    // X投稿日時が無いものは末尾に回る
+    expect(order.indexOf(oldId)).toBeLessThan(order.indexOf(noDateId));
+  });
+
   it("verificationStatusで絞り込める（rejected済みも一覧に含まれる）", async () => {
     await insertLottery({ productNameRaw: "承認済み商品", verificationStatus: "approved" });
     await insertLottery({ productNameRaw: "却下済み商品", verificationStatus: "rejected" });
