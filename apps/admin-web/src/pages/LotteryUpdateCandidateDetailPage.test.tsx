@@ -22,6 +22,7 @@ function makeCandidate(overrides: Partial<LotteryUpdateCandidateRow> = {}): Lott
     registeredLotteryId: null,
     createdAt: "2026-01-01",
     updatedAt: "2026-01-01",
+    sourcePostPublishedAt: null,
     ...overrides,
   };
 }

@@ -49,8 +49,11 @@ function jsonAuthHeaders() {
   return { "Content-Type": "application/json", ...authHeaders() };
 }
 
-async function insertSourcePost(externalPostId: string): Promise<number> {
-  const [row] = await db.insert(sourcePosts).values({ externalPostId }).returning();
+async function insertSourcePost(
+  externalPostId: string,
+  overrides: Partial<typeof sourcePosts.$inferInsert> = {}
+): Promise<number> {
+  const [row] = await db.insert(sourcePosts).values({ externalPostId, ...overrides }).returning();
   return row.id;
 }
 
@@ -108,8 +111,10 @@ function makeExtractedData(sourcePostId: number, overrides: Partial<LotteryCandi
   } as LotteryCandidateData;
 }
 
-async function createPendingCandidate(): Promise<{ candidateId: number; targetLotteryId: number; sourcePostId: number }> {
-  const sourcePostId = await insertSourcePost(`cand-route-${Date.now()}-${Math.random()}`);
+async function createPendingCandidate(
+  sourcePostOverrides: Partial<typeof sourcePosts.$inferInsert> = {}
+): Promise<{ candidateId: number; targetLotteryId: number; sourcePostId: number }> {
+  const sourcePostId = await insertSourcePost(`cand-route-${Date.now()}-${Math.random()}`, sourcePostOverrides);
   const targetLotteryId = await insertLottery({ region: null });
   const upserted = await upsertLotteryUpdateCandidate(db, {
     targetLotteryId,
@@ -139,6 +144,23 @@ describe("GET /admin/lottery-update-candidates", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: { id: number }[]; total: number };
     expect(body.items.some((i) => i.id === candidateId)).toBe(true);
+  });
+
+  it("元投稿のX投稿日時（sourcePostPublishedAt）を含む", async () => {
+    const publishedAt = "2026-08-15T12:34:00.000Z";
+    const { candidateId } = await createPendingCandidate({ publishedAt });
+    const res = await app.request("/admin/lottery-update-candidates?status=pending", { headers: authHeaders() });
+    const body = (await res.json()) as { items: { id: number; sourcePostPublishedAt: string | null }[] };
+    const item = body.items.find((i) => i.id === candidateId);
+    expect(item?.sourcePostPublishedAt).toBe(publishedAt);
+  });
+
+  it("元投稿にpublishedAtが無ければnullを返す", async () => {
+    const { candidateId } = await createPendingCandidate();
+    const res = await app.request("/admin/lottery-update-candidates?status=pending", { headers: authHeaders() });
+    const body = (await res.json()) as { items: { id: number; sourcePostPublishedAt: string | null }[] };
+    const item = body.items.find((i) => i.id === candidateId);
+    expect(item?.sourcePostPublishedAt).toBeNull();
   });
 });
 

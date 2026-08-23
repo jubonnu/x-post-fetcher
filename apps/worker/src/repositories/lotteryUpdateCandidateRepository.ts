@@ -1,10 +1,11 @@
-import { and, count, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns } from "drizzle-orm";
 import type { Db, DbOrTx } from "../db/client.ts";
 import {
   lotteries,
   lotteryFieldHistory,
   lotterySources,
   lotteryUpdateCandidates,
+  sourcePosts,
   type LotteryRow,
   type LotteryUpdateCandidateRow,
 } from "../db/schema.ts";
@@ -114,8 +115,14 @@ export interface ListLotteryUpdateCandidatesOptions {
   offset?: number;
 }
 
+/** 更新候補行（`LotteryUpdateCandidateRow`に加え、元投稿がXに投稿された日時を持つ）。
+ * 管理者が実際のX投稿と突き合わせて確認できるようにするため（`AdminLotteryRow`と同様の目的）。 */
+export interface AdminLotteryUpdateCandidateRow extends LotteryUpdateCandidateRow {
+  sourcePostPublishedAt: string | null;
+}
+
 export interface ListLotteryUpdateCandidatesResult {
-  candidates: LotteryUpdateCandidateRow[];
+  candidates: AdminLotteryUpdateCandidateRow[];
   total: number;
 }
 
@@ -129,8 +136,9 @@ export async function listLotteryUpdateCandidates(
 
   const [rows, [{ total }]] = await Promise.all([
     db
-      .select()
+      .select({ ...getTableColumns(lotteryUpdateCandidates), sourcePostPublishedAt: sourcePosts.publishedAt })
       .from(lotteryUpdateCandidates)
+      .leftJoin(sourcePosts, eq(sourcePosts.id, lotteryUpdateCandidates.sourcePostId))
       .where(where)
       .orderBy(desc(lotteryUpdateCandidates.createdAt))
       .limit(Math.min(limit, 100))

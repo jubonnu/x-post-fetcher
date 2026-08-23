@@ -74,6 +74,8 @@ export interface LotteryUpdateCandidateRow {
   registeredLotteryId: number | null;
   createdAt: string;
   updatedAt: string;
+  /** 元投稿がXに投稿された日時（管理者が実際のX投稿と突き合わせて確認できるようにするため）。 */
+  sourcePostPublishedAt: string | null;
 }
 
 export interface LotteryUpdateCandidateListResponse {

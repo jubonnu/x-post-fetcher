@@ -31,6 +31,15 @@ function parseExtracted(row: LotteryUpdateCandidateRow): ExtractedLotteryData | 
   }
 }
 
+/** 元投稿がXに投稿された日時を表示用に整形する（実際のX投稿と突き合わせて確認するため）。 */
+function displayPublishedAt(item: LotteryUpdateCandidateRow): string | null {
+  if (!item.sourcePostPublishedAt) return null;
+  const d = new Date(item.sourcePostPublishedAt);
+  if (Number.isNaN(d.getTime())) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `X投稿日時: ${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function LotteryUpdateCandidateListPage() {
   const { admin, logout } = useAuth();
   const [tab, setTab] = useState<Tab>("pending");
@@ -119,6 +128,7 @@ export function LotteryUpdateCandidateListPage() {
                   <div className="muted">
                     {extracted?.storeNameRaw?.trim() || extracted?.normalizedStoreName?.trim() || "店舗情報なし"}
                   </div>
+                  {displayPublishedAt(item) ? <div className="muted">{displayPublishedAt(item)}</div> : null}
                   <span className="badge needs-review">{matchLevelLabel(item.matchScore)}（{item.matchScore ?? 0}点）</span>
                 </div>
               </div>

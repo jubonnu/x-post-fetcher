@@ -22,6 +22,7 @@ function makeCandidate(overrides: Partial<LotteryUpdateCandidateRow> & { id: num
     registeredLotteryId: null,
     createdAt: "2026-01-01",
     updatedAt: "2026-01-01",
+    sourcePostPublishedAt: null,
     ...overrides,
   };
 }
@@ -76,6 +77,29 @@ describe("LotteryUpdateCandidateListPage", () => {
     await waitFor(() =>
       expect(apiRequestSpy).toHaveBeenLastCalledWith("/admin/lottery-update-candidates?status=applied&limit=20&offset=0")
     );
+  });
+
+  it("sourcePostPublishedAtがあれば「X投稿日時」を表示する", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({
+      items: [makeCandidate({ id: 1, sourcePostPublishedAt: "2026-08-15T12:34:00.000Z" })],
+      total: 1,
+    } satisfies LotteryUpdateCandidateListResponse);
+
+    renderPage();
+
+    expect(await screen.findByText(/X投稿日時: 2026\/08\/15/)).toBeInTheDocument();
+  });
+
+  it("sourcePostPublishedAtが無ければ「X投稿日時」を表示しない", async () => {
+    vi.spyOn(client, "apiRequest").mockResolvedValue({
+      items: [makeCandidate({ id: 1, sourcePostPublishedAt: null })],
+      total: 1,
+    } satisfies LotteryUpdateCandidateListResponse);
+
+    renderPage();
+
+    await screen.findByText("商品1");
+    expect(screen.queryByText(/X投稿日時/)).not.toBeInTheDocument();
   });
 
   it("候補が無い場合はメッセージを表示する", async () => {
