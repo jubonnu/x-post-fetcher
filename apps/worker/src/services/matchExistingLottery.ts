@@ -3,15 +3,29 @@ import { extractDomain } from "@x-post/shared";
 /**
  * 同一抽選マッチング（Phase 3・純関数）。
  *
- * 手順（実装計画 §matchExistingLottery に準拠）:
+ * 手順（実装計画 §matchExistingLottery に準拠、2026-08 改訂）:
  *  1. **禁止条件（ハードブロック）を先に評価**。該当すればスコアに関係なく統合しない（新規扱い）。
+ *     カード種別の不一致・締切の大幅な乖離が対象。支店不一致のみブロックから減点方式へ変更した
+ *     （理由は下記）。
  *  2. ブロックされなかった既存だけをスコアリング（商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5
- *     / 結果待ちボーナス15）。
+ *     / 結果待ちボーナス15 / 支店不一致の減点）。
  *  3. 最高スコアで判定: 80+ → merge / 50–79 → review / 49- → new。
  *
- * 注: オンライン/店頭・販売形態・抽選回（第2回等）のブロックは専用フィールド未整備のため Phase 3 では未実装
- * （カード種別・支店・締切差でブロック）。締切が未確定（unknown/not_published/store_closing_time）の場合は
- * 締切差でブロックしない。
+ * 注: オンライン/店頭・販売形態・抽選回（第2回等）のブロックは専用フィールド未整備のため Phase 3 では未実装。
+ * 締切が未確定（unknown/not_published/store_closing_time）の場合は締切差でブロックしない。
+ *
+ * 支店不一致を「即new」ではなく減点にした理由（2026-08、実データで確認）:
+ * 支店の表記揺れ（「エディオン」/「トレカキャピタル」のような、同一店舗を指す別名の混在等）が、
+ * 商品名・店舗名は完全一致しているにもかかわらずハードブロックで問答無用に new 扱いされ、
+ * 気づかれにくい重複登録を生んでいた。商品+店舗が強く一致していれば減点後も要確認閾値(50)は
+ * 超えられるようにしつつ、他が弱い候補まで誤って要確認に混ざらないよう減点幅を調整している。
+ *
+ * なお「締切乖離7日超も減点方式にする」「当選発表投稿は店舗名一致のみでも救済する」という案も
+ * 検討したが、本番データでのdry-runでどちらも副作用が大きいことが判明したため見送った
+ * （2026-08）: 前者は人気商品の再販が同一店舗で月をまたいで複数ラウンド行われるのが通常であり、
+ * 誤検知が67件中59件（88%）を占めた。後者は商品名を条件にしないため、同一店舗の無関係な
+ * 別商品同士まで522ペアが要確認候補になってしまった。締切乖離は引き続きハードブロックのまま、
+ * 当選発表の結果待ちボーナスは元の「商品/店舗合算40点必須」のまま維持する。
  *
  * 結果待ちボーナス（15点）: 商品/店舗一致が既に40点以上あり、候補（新しい投稿）に当選発表情報が
  * 抽出できていて、既存側にはまだ無い場合に加点する。当選発表だけの短い後続投稿（例:「当選発表しました」）
@@ -92,7 +106,8 @@ function dayDiff(d1: string, d2: string): number {
   return Math.abs(t1 - t2) / 86_400_000;
 }
 
-/** 禁止条件（ハードブロック）。該当すれば理由文字列、なければ null。 */
+/** 禁止条件（ハードブロック）。該当すれば理由文字列、なければ null。
+ * カード種別の不一致・締切の大幅な乖離が対象（支店は下記 scorePair 内の減点に変更済み）。 */
 export function hardBlockReason(a: MatchableLottery, b: MatchableLottery, opts: MatchOptions = {}): string | null {
   const deadlineBlockDays = opts.deadlineBlockDays ?? DEFAULTS.deadlineBlockDays;
 
@@ -100,11 +115,6 @@ export function hardBlockReason(a: MatchableLottery, b: MatchableLottery, opts: 
   const ca = norm(a.cardType);
   const cb = norm(b.cardType);
   if (ca && cb && ca !== "unknown" && cb !== "unknown" && ca !== cb) return "card_type_differs";
-
-  // 店舗支店が異なる（両方に支店があり不一致）
-  if (bothPresent(a.normalizedStoreBranch, b.normalizedStoreBranch) && norm(a.normalizedStoreBranch) !== norm(b.normalizedStoreBranch)) {
-    return "store_branch_differs";
-  }
 
   // 応募締切が大きく異なる（両方が確定日付を持つ場合のみ。未確定はブロックしない）
   const da = resolvedEndDate(a);
@@ -114,7 +124,12 @@ export function hardBlockReason(a: MatchableLottery, b: MatchableLottery, opts: 
   return null;
 }
 
-/** スコアリング（0–115）。商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5 / 結果待ちボーナス15。 */
+/** 支店不一致1件あたりの減点。商品+店舗が完全一致(70点)していれば、減点を受けても
+ * 要確認閾値(50)は超えられる一方、他が弱い候補まで巻き込まないよう調整した値（2026-08）。 */
+const BRANCH_MISMATCH_PENALTY = 15;
+
+/** スコアリング（-15〜115）。商品40 / 店舗30 / 支店地域10 / 締切15 / ドメイン5 / 結果待ちボーナス15 /
+ * 支店不一致の減点(-15)。負の値は0に丸めない（新規判定の閾値未満であれば結果は同じため）。 */
 export function scorePair(a: MatchableLottery, b: MatchableLottery): number {
   let score = 0;
 
@@ -156,8 +171,12 @@ export function scorePair(a: MatchableLottery, b: MatchableLottery): number {
   const existingLacksResult = norm(b.resultAnnouncementAt).length === 0 && norm(b.resultAnnouncementDate).length === 0;
   if (productStoreScore >= 40 && candidateHasResult && existingLacksResult) score += 15;
 
-  // 支店 + 地域 10（各5）
-  if (bothPresent(a.normalizedStoreBranch, b.normalizedStoreBranch) && norm(a.normalizedStoreBranch) === norm(b.normalizedStoreBranch)) score += 5;
+  // 支店 + 地域 10（各5）。支店は一致すれば+5、両方に支店情報があって不一致なら-15（表記揺れで
+  // 完全一致の商品+店舗まで new 扱いされていた実データを踏まえた減点。2026-08）。
+  if (bothPresent(a.normalizedStoreBranch, b.normalizedStoreBranch)) {
+    if (norm(a.normalizedStoreBranch) === norm(b.normalizedStoreBranch)) score += 5;
+    else score -= BRANCH_MISMATCH_PENALTY;
+  }
   if (bothPresent(a.region, b.region) && norm(a.region) === norm(b.region)) score += 5;
 
   // 締切 15（同日15 / 1日差8）

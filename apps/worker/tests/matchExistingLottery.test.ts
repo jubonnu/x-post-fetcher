@@ -22,10 +22,10 @@ describe("hardBlockReason（禁止条件）", () => {
   it("カード種類が異なる → block", () => {
     expect(hardBlockReason(base, { ...base, cardType: "onepiece" })).toBe("card_type_differs");
   });
-  it("支店が異なる → block", () => {
+  it("支店が異なってもブロックしない（減点方式に変更済み。scorePair側でテスト）", () => {
     const a = { ...base, normalizedStoreBranch: "梅田店" };
     const b = { ...base, normalizedStoreBranch: "難波店" };
-    expect(hardBlockReason(a, b)).toBe("store_branch_differs");
+    expect(hardBlockReason(a, b)).toBeNull();
   });
   it("締切差が閾値(7日)超 → block", () => {
     const b = { ...base, applicationEndDate: "2026-08-20", applicationEndAt: "2026-08-20T23:59:00+09:00" };
@@ -77,6 +77,37 @@ describe("scorePair（スコアリング）", () => {
     const candidate = { ...noMatch, resultAnnouncementDate: "2026-08-15" };
     const existing = { ...base, applicationEndDate: null, applicationEndPrecision: "unknown", resultAnnouncementDate: null };
     expect(scorePair(candidate, existing)).toBe(0);
+  });
+
+  describe("支店不一致の減点（2026-08、ハードブロックから変更。締切乖離・結果待ちボーナスの拡張は" +
+    "本番データのdry-runで副作用が大きいと判明したため見送り、元のハードブロック/元のボーナス条件のまま）", () => {
+    it("支店不一致: 商品・店舗完全一致でも-15され、要確認閾値は超える", () => {
+      const a = { ...base, normalizedStoreBranch: "梅田店" };
+      const b = { ...base, normalizedStoreBranch: "難波店" };
+      expect(scorePair(a, b)).toBe(70); // 40 + 30 + 15(締切) - 15(支店不一致) = 70
+    });
+
+    it("弱い一致に支店不一致が重なると閾値未満のまま（誤って要確認に混ざらない）", () => {
+      const a = { ...base, normalizedStoreName: "ホビーステーション", normalizedStoreBranch: "梅田店" };
+      const b = { ...base, normalizedStoreBranch: "難波店" };
+      // 商品40のみ + 締切15 - 支店15 = 40（店舗不一致のため店舗加点なし）
+      expect(scorePair(a, b)).toBe(40);
+    });
+
+    it("matchExistingLottery: 支店表記揺れでも商品・店舗が強一致なら review になる（以前は new だった）", () => {
+      const a = { ...base, normalizedStoreBranch: "池袋東口店" };
+      const b = { ...base, normalizedStoreBranch: "池袋店" };
+      const r = matchExistingLottery(a, [b]);
+      expect(r.action).toBe("review");
+      expect(r.score).toBe(70);
+    });
+
+    it("matchExistingLottery: 締切乖離7日超は引き続き new（別ラウンドの再販と区別できないため見送り）", () => {
+      const extended = { ...base, applicationEndDate: "2026-08-25", applicationEndAt: "2026-08-25T23:59:00+09:00" };
+      const r = matchExistingLottery(extended, [base]);
+      expect(r.action).toBe("new");
+      expect(r.reason).toContain("deadline_diff_gt_7d");
+    });
   });
 
   describe("商品名の部分集合ボーナス（改善案2）", () => {
