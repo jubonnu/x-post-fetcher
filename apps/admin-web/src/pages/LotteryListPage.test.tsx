@@ -371,6 +371,77 @@ describe("LotteryListPage", () => {
     });
   });
 
+  describe("店舗名・カードタイトルの検索", () => {
+    it("URLに検索語が入っていれば、再マウント後も検索入力欄に復元される（編集画面から戻っても消えない）", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage(["/?search=ストームエメラルダ"]);
+
+      await waitFor(() => {
+        const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+        expect(lastCall).toContain("search=");
+      });
+      expect(screen.getByLabelText("店舗名・カードタイトルで検索")).toHaveValue("ストームエメラルダ");
+      expect(screen.getByRole("button", { name: "検索をクリア" })).toBeInTheDocument();
+    });
+
+    it("入力すると、少し待ってからsearchを付けて再取得しページも0に戻る（1文字ごとには取得しない）", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage();
+      await waitFor(() => expect(apiRequestSpy).toHaveBeenCalledTimes(1));
+
+      fireEvent.change(screen.getByLabelText("店舗名・カードタイトルで検索"), { target: { value: "ドラゴンスター" } });
+
+      // デバウンス中はまだ再取得されない
+      expect(apiRequestSpy).toHaveBeenCalledTimes(1);
+
+      await waitFor(
+        () => {
+          const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+          expect(lastCall).toContain("search=%E3%83%89%E3%83%A9%E3%82%B4%E3%83%B3%E3%82%B9%E3%82%BF%E3%83%BC");
+          expect(lastCall).toContain("offset=0");
+        },
+        { timeout: 2000 }
+      );
+    });
+
+    it("検索語が未指定なら「検索をクリア」ボタンを表示しない", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage();
+
+      expect(screen.queryByRole("button", { name: "検索をクリア" })).not.toBeInTheDocument();
+    });
+
+    it("「検索をクリア」ボタンで検索語を解除し、searchパラメータ無しで再取得する", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 0 } satisfies LotteryListResponse);
+
+      renderPage(["/?search=ストームエメラルダ"]);
+      await waitFor(() => {
+        const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+        expect(lastCall).toContain("search=");
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "検索をクリア" }));
+
+      await waitFor(
+        () => {
+          const lastCall = apiRequestSpy.mock.calls.at(-1)?.[0] as string;
+          expect(lastCall).not.toContain("search=");
+        },
+        { timeout: 2000 }
+      );
+      expect(screen.queryByRole("button", { name: "検索をクリア" })).not.toBeInTheDocument();
+    });
+  });
+
   it("取得に失敗するとエラーメッセージを表示する", async () => {
     vi.spyOn(client, "apiRequest").mockRejectedValue(new client.ApiError("SERVICE_BUSY", "サーバーが混雑しています", 503));
 

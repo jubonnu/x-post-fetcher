@@ -103,6 +103,13 @@ export function LotteryListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const publishedFrom = searchParams.get("publishedFrom") ?? "";
   const publishedTo = searchParams.get("publishedTo") ?? "";
+  const search = searchParams.get("search") ?? "";
+  // 入力中は即座にinputへ反映しつつ、URL（＝実際の検索実行）への反映は少し遅らせる
+  // （1文字ごとにAPIを叩かないため）。URLと違いずれた場合はsearchの変化で追従させる。
+  const [searchInput, setSearchInput] = useState(search);
+  useEffect(() => {
+    setSearchInput(search);
+  }, [search]);
   const [items, setItems] = useState<LotteryRow[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -126,6 +133,7 @@ export function LotteryListPage() {
       const toIso = dateInputToRangeEndIso(publishedTo);
       if (fromIso) params.set("sourcePostPublishedAtFrom", fromIso);
       if (toIso) params.set("sourcePostPublishedAtTo", toIso);
+      if (search) params.set("search", search);
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(offset));
 
@@ -137,7 +145,7 @@ export function LotteryListPage() {
     } finally {
       setLoading(false);
     }
-  }, [tab, page, publishedFrom, publishedTo]);
+  }, [tab, page, publishedFrom, publishedTo, search]);
 
   useEffect(() => {
     void load();
@@ -176,6 +184,29 @@ export function LotteryListPage() {
       next.delete("publishedTo");
       return next;
     });
+  }
+
+  function handleSearchInputChange(value: string) {
+    setSearchInput(value);
+  }
+
+  // 入力が止まって400ms経ってからURL（実際の検索実行）へ反映する（1文字ごとにAPIを叩かないため）。
+  useEffect(() => {
+    if (searchInput === search) return;
+    const timer = setTimeout(() => {
+      setPage(0);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (searchInput) next.set("search", searchInput);
+        else next.delete("search");
+        return next;
+      });
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [searchInput, search, setSearchParams]);
+
+  function clearSearch() {
+    setSearchInput("");
   }
 
   async function handleApprove(id: number) {
@@ -220,6 +251,24 @@ export function LotteryListPage() {
             <button type="button" className="secondary" onClick={logout}>
               ログアウト
             </button>
+          </div>
+          <div className="date-filter-row">
+            <label className="muted" htmlFor="lottery-search">
+              検索
+            </label>
+            <input
+              id="lottery-search"
+              type="text"
+              aria-label="店舗名・カードタイトルで検索"
+              placeholder="店舗名・カードタイトル"
+              value={searchInput}
+              onChange={(e) => handleSearchInputChange(e.target.value)}
+            />
+            {searchInput ? (
+              <button type="button" className="secondary" aria-label="検索をクリア" onClick={clearSearch}>
+                クリア
+              </button>
+            ) : null}
           </div>
           <div className="date-filter-row">
             <label className="muted" htmlFor="published-from">

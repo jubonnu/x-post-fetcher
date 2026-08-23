@@ -161,11 +161,16 @@ button:disabled {
   font-size: 13px;
 }
 
-.date-filter-row input[type="date"] {
+.date-filter-row input[type="date"],
+.date-filter-row input[type="text"] {
   padding: 4px 6px;
   border: 1px solid var(--border, #d5d8dc);
   border-radius: 6px;
   font-size: 13px;
+}
+
+.date-filter-row input[type="text"] {
+  width: 180px;
 }
 
 .filter-tabs {
@@ -327,7 +332,8 @@ button:disabled {
     align-items: stretch;
   }
 
-  .date-filter-row input[type="date"] {
+  .date-filter-row input[type="date"],
+  .date-filter-row input[type="text"] {
     width: 100%;
   }
 
