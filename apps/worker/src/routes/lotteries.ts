@@ -1,6 +1,10 @@
 import type { Hono } from "hono";
 import type { AppEnv } from "../env.ts";
-import { getLotteryWithDetails, listLotteries, withParsedApplicationUrls } from "../repositories/lotteryRepository.ts";
+import {
+  getPublicLotteryWithDetails,
+  listLotteries,
+  withParsedApplicationUrls,
+} from "../repositories/lotteryRepository.ts";
 import { decodeLotteryListCursor, InvalidCursorError } from "../services/lotteryListCursor.ts";
 import { isParsableDate } from "../validation/limits.ts";
 
@@ -64,7 +68,7 @@ export function registerLotteries(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "invalid_id" }, 400);
     }
 
-    const detail = await getLotteryWithDetails(db, id);
+    const detail = await getPublicLotteryWithDetails(db, id);
     if (!detail) {
       return c.json({ ok: false, error: "not_found" }, 404);
     }

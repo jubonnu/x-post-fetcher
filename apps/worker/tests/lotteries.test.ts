@@ -64,10 +64,34 @@ beforeAll(async () => {
         normalizedProductName: "resultPending",
         cardType: "pokemon",
         storeNameRaw: "ホビーステーション",
-        verificationStatus: "needs_review",
+        verificationStatus: "extracted",
         status: "open",
         applicationEndAt: "2026-08-01T00:00:00.000Z",
         resultAnnouncementAt: "2026-08-10T00:00:00.000Z",
+      },
+      {
+        productNameRaw: "hiddenNeedsReview",
+        normalizedProductName: "hiddenNeedsReview",
+        cardType: "pokemon",
+        storeNameRaw: "ホビーステーション",
+        verificationStatus: "needs_review",
+        status: "open",
+      },
+      {
+        productNameRaw: "hiddenConflicting",
+        normalizedProductName: "hiddenConflicting",
+        cardType: "pokemon",
+        storeNameRaw: "ホビーステーション",
+        verificationStatus: "conflicting",
+        status: "open",
+      },
+      {
+        productNameRaw: "hiddenRejected",
+        normalizedProductName: "hiddenRejected",
+        cardType: "pokemon",
+        storeNameRaw: "ホビーステーション",
+        verificationStatus: "rejected",
+        status: "open",
       },
       {
         productNameRaw: "endedNew",
@@ -129,11 +153,26 @@ describe("GET /lotteries", () => {
     expect(json.lotteries.every((l: any) => l.cardType === "pokemon")).toBe(true);
   });
 
-  it("verificationStatus フィルタ", async () => {
-    const res = await get(withAsOf("/lotteries?verificationStatus=needs_review&limit=100"));
+  it("verificationStatus フィルタで extracted を明示指定しても hidden 系は混ざらない", async () => {
+    const res = await get(withAsOf("/lotteries?verificationStatus=extracted&limit=100"));
     const json: any = await res.json();
-    expect(json.lotteries).toHaveLength(1);
-    expect(json.lotteries[0].normalizedProductName).toBe("resultPending");
+    expect(json.lotteries).toHaveLength(6);
+    expect(json.lotteries.every((l: any) => l.verificationStatus === "extracted")).toBe(true);
+  });
+
+  it("needs_review/conflicting/rejected は一覧から除外される（?verificationStatus指定でも見えない）", async () => {
+    const res = await get(withAsOf("/lotteries?limit=100"));
+    const json: any = await res.json();
+    const names = json.lotteries.map((l: any) => l.normalizedProductName);
+    expect(names).not.toContain("hiddenNeedsReview");
+    expect(names).not.toContain("hiddenConflicting");
+    expect(names).not.toContain("hiddenRejected");
+
+    for (const status of ["needs_review", "conflicting", "rejected"]) {
+      const filtered = await get(withAsOf(`/lotteries?verificationStatus=${status}&limit=100`));
+      const filteredJson: any = await filtered.json();
+      expect(filteredJson.lotteries).toHaveLength(0);
+    }
   });
 
   it("limit は最大 100 に制限される", async () => {
@@ -306,5 +345,12 @@ describe("GET /lotteries/:id", () => {
     const res = await get(`/lotteries/${ids.acceptingNear}`);
     const json: any = await res.json();
     expect(json.lottery.applicationUrls).toBeNull();
+  });
+
+  it("needs_review/conflicting/rejected はID直指定でも404（一覧に出ない抽選をID推測で見られない）", async () => {
+    for (const name of ["hiddenNeedsReview", "hiddenConflicting", "hiddenRejected"]) {
+      const res = await get(`/lotteries/${ids[name]}`);
+      expect(res.status).toBe(404);
+    }
   });
 });

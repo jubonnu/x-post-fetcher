@@ -42,6 +42,10 @@ function verification(l: ExtractedLottery): string {
   return fields.some((f) => f.status === "conflicting") ? "conflicting" : "extracted";
 }
 
+/** 公開（アプリ向け）では見せない verificationStatus。
+ * 却下済みに加え、要確認・矛盾ありの曖昧なデータは承認されるまで管理画面のみで確認する運用のため。 */
+const PUBLIC_HIDDEN_VERIFICATION_STATUSES: string[] = ["rejected", "needs_review", "conflicting"];
+
 /** 応募ページURLの配列をDB保存用のJSON文字列へ（空配列/未指定はnull）。 */
 function serializeApplicationUrls(urls: string[] | null | undefined): string | null {
   if (!urls || urls.length === 0) return null;
@@ -559,8 +563,8 @@ export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions): Pro
   const nowEpoch = Math.floor(new Date(asOf).getTime() / 1000);
 
   const conditions = [
-    // rejected は公開しない
-    ne(lotteries.verificationStatus, "rejected"),
+    // rejected/needs_review/conflicting は公開しない（承認済み運用: 曖昧なデータは管理画面のみで確認する）
+    notInArray(lotteries.verificationStatus, PUBLIC_HIDDEN_VERIFICATION_STATUSES),
     // orphaned / archived は公開しない
     eq(lotteries.lifecycleStatus, "active"),
     ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
@@ -695,10 +699,13 @@ export async function lotteryExists(db: DbOrTx, lotteryId: number): Promise<bool
   return rows.length > 0;
 }
 
-/** 抽選の詳細（lottery_sources + lottery_field_history 付き）を取得する。 */
-export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<LotteryWithDetails | null> {
-  const rows = await db.select().from(lotteries).where(eq(lotteries.id, id));
+async function fetchLotteryWithDetailsByCondition(
+  db: DbOrTx,
+  where: SQL | undefined
+): Promise<LotteryWithDetails | null> {
+  const rows = await db.select().from(lotteries).where(where);
   if (rows.length === 0) return null;
+  const id = rows[0].id;
 
   const [sources, fieldHistory] = await Promise.all([
     db.select().from(lotterySources).where(eq(lotterySources.lotteryId, id)).orderBy(asc(lotterySources.createdAt)),
@@ -710,6 +717,25 @@ export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<Lot
   ]);
 
   return { lottery: rows[0], sources, fieldHistory };
+}
+
+/** 抽選の詳細（lottery_sources + lottery_field_history 付き）を取得する。
+ * ステータスによる絞り込みなし（管理画面用。rejected/needs_review/orphaned等も見える）。 */
+export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<LotteryWithDetails | null> {
+  return fetchLotteryWithDetailsByCondition(db, eq(lotteries.id, id));
+}
+
+/** 公開 GET /lotteries/:id 用。listLotteries と同じ基準（rejected/needs_review/conflicting +
+ * 非active除外）でフィルタする。一覧に出ない抽選をID直指定で見られてしまう抜け穴を防ぐ。 */
+export async function getPublicLotteryWithDetails(db: DbOrTx, id: number): Promise<LotteryWithDetails | null> {
+  return fetchLotteryWithDetailsByCondition(
+    db,
+    and(
+      eq(lotteries.id, id),
+      notInArray(lotteries.verificationStatus, PUBLIC_HIDDEN_VERIFICATION_STATUSES),
+      eq(lotteries.lifecycleStatus, "active")
+    )
+  );
 }
 
 export interface ListLotteriesForAdminOptions {
