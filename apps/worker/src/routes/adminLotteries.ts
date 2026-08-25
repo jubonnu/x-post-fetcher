@@ -5,6 +5,7 @@ import { ApiError, apiErrorJson } from "../auth/errors.ts";
 import { findAdminUserById } from "../repositories/adminUserRepository.ts";
 import {
   approveLotteryByAdmin,
+  bulkApplyLotteryImageByProductName,
   createLotteryByAdmin,
   getLotteryWithDetails,
   listLotteriesForAdmin,
@@ -268,6 +269,32 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
 
     await updateLotteryByAdmin(db, id, { imageUrl: null });
     return c.json({ ok: true });
+  });
+
+  // 追加機能: 既存の単一抽選への画像アップロードはそのまま、その結果（imageUrl）を
+  // 同じ商品名（normalizedProductName）を持つ他の抽選すべてへ一括反映する。
+  app.post("/admin/lotteries/:id/image/apply-to-same-title", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const db = c.get("db");
+    const detail = await getLotteryWithDetails(db, id);
+    if (!detail) return apiErrorJson(c, new ApiError("NOT_FOUND", "抽選が見つかりません"));
+
+    if (!detail.lottery.imageUrl) {
+      return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "先にこの抽選へ画像をアップロードしてください"));
+    }
+    if (!detail.lottery.normalizedProductName) {
+      return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "商品名が未設定のため一括反映できません"));
+    }
+
+    const result = await bulkApplyLotteryImageByProductName(
+      db,
+      id,
+      detail.lottery.normalizedProductName,
+      detail.lottery.imageUrl
+    );
+    return c.json({ ok: true, updatedCount: result.updatedIds.length, updatedIds: result.updatedIds });
   });
 
   app.post("/admin/lotteries/:id/merge-into", requireAdminAuth, async (c) => {

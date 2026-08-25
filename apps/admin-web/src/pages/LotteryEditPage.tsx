@@ -40,6 +40,8 @@ export function LotteryEditPage() {
   const [saving, setSaving] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [deletingImage, setDeletingImage] = useState(false);
+  const [applyingImageToSameTitle, setApplyingImageToSameTitle] = useState(false);
+  const [applyImageResult, setApplyImageResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [mergeSearch, setMergeSearch] = useState("");
@@ -143,6 +145,29 @@ export function LotteryEditPage() {
       setError(e instanceof ApiError ? e.message : "画像の削除に失敗しました");
     } finally {
       setDeletingImage(false);
+    }
+  }
+
+  /** 追加機能: 今の画像を、同じ商品名（タイトル）を持つ他の抽選すべてへ一括反映する。
+   * 単一抽選への画像アップロード/削除の既存フローには一切影響しない。 */
+  async function handleApplyImageToSameTitle() {
+    if (!lottery?.normalizedProductName?.trim()) return;
+    if (!window.confirm(`「${lottery.productNameRaw ?? lottery.normalizedProductName}」と同じ商品名の抽選すべてに、この画像を反映しますか？`))
+      return;
+    setApplyingImageToSameTitle(true);
+    setError(null);
+    setApplyImageResult(null);
+    try {
+      const res = await apiRequest<{ updatedCount: number }>(`/admin/lotteries/${id}/image/apply-to-same-title`, {
+        method: "POST",
+      });
+      setApplyImageResult(
+        res.updatedCount > 0 ? `${res.updatedCount}件の抽選に反映しました` : "同じ商品名の他の抽選は見つかりませんでした"
+      );
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "一括反映に失敗しました");
+    } finally {
+      setApplyingImageToSameTitle(false);
     }
   }
 
@@ -293,6 +318,22 @@ export function LotteryEditPage() {
           <button type="button" className="danger" style={{ marginTop: 8 }} disabled={deletingImage} onClick={() => void handleImageDelete()}>
             {deletingImage ? "削除中…" : "画像を削除"}
           </button>
+        ) : null}
+        {lottery.imageUrl && lottery.normalizedProductName?.trim() ? (
+          <div style={{ marginTop: 8 }}>
+            <button
+              type="button"
+              className="secondary"
+              disabled={applyingImageToSameTitle}
+              onClick={() => void handleApplyImageToSameTitle()}
+            >
+              {applyingImageToSameTitle ? "反映中…" : "同じ商品名の抽選すべてに反映"}
+            </button>
+            <p className="muted" style={{ marginTop: 4 }}>
+              商品名「{lottery.productNameRaw ?? lottery.normalizedProductName}」と完全一致する他の抽選に、この画像を一括で反映します
+            </p>
+            {applyImageResult ? <p className="muted">{applyImageResult}</p> : null}
+          </div>
         ) : null}
       </div>
 

@@ -619,6 +619,135 @@ describe("DELETE /admin/lotteries/:id/image", () => {
   });
 });
 
+describe("POST /admin/lotteries/:id/image/apply-to-same-title", () => {
+  async function uploadImage(id: number, bucket: ReturnType<typeof fakeBucket>): Promise<string> {
+    const res = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/png", ...authHeaders() }, body: new Uint8Array([1, 2, 3]) },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+    const body = (await res.json()) as { imageUrl: string };
+    return body.imageUrl;
+  }
+
+  it("同じ商品名の他抽選すべてにimageUrlが反映される", async () => {
+    const title = `同名商品-${Date.now()}`;
+    const source = await insertLottery({ productNameRaw: title, normalizedProductName: title });
+    const sameTitleA = await insertLottery({ productNameRaw: `${title}（店舗A）`, normalizedProductName: title });
+    const sameTitleB = await insertLottery({ productNameRaw: `${title}（店舗B）`, normalizedProductName: title });
+    const otherTitle = await insertLottery({ productNameRaw: "別商品", normalizedProductName: "別商品" });
+
+    const bucket = fakeBucket();
+    const imageUrl = await uploadImage(source, bucket);
+
+    const res = await app.request(`/admin/lotteries/${source}/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; updatedCount: number; updatedIds: number[] };
+    expect(body.ok).toBe(true);
+    expect(body.updatedCount).toBe(2);
+    expect(new Set(body.updatedIds)).toEqual(new Set([sameTitleA, sameTitleB]));
+
+    for (const id of [sameTitleA, sameTitleB]) {
+      const detailRes = await app.request(`/admin/lotteries/${id}`, { headers: authHeaders() });
+      const detail = (await detailRes.json()) as { lottery: { imageUrl: string | null } };
+      expect(detail.lottery.imageUrl).toBe(imageUrl);
+    }
+
+    const otherRes = await app.request(`/admin/lotteries/${otherTitle}`, { headers: authHeaders() });
+    const other = (await otherRes.json()) as { lottery: { imageUrl: string | null } };
+    expect(other.lottery.imageUrl).toBeNull();
+  });
+
+  it("既存の単一アップロード機能には影響しない（対象自身のimageUrlは変わらない）", async () => {
+    const title = `単体確認-${Date.now()}`;
+    const source = await insertLottery({ productNameRaw: title, normalizedProductName: title });
+    const bucket = fakeBucket();
+    const imageUrl = await uploadImage(source, bucket);
+
+    await app.request(`/admin/lotteries/${source}/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+
+    const detailRes = await app.request(`/admin/lotteries/${source}`, { headers: authHeaders() });
+    const detail = (await detailRes.json()) as { lottery: { imageUrl: string | null } };
+    expect(detail.lottery.imageUrl).toBe(imageUrl);
+  });
+
+  it("対象自身しか無い（同名の他抽選が無い）場合はupdatedCount=0で成功する", async () => {
+    const title = `孤立商品-${Date.now()}`;
+    const source = await insertLottery({ productNameRaw: title, normalizedProductName: title });
+    const bucket = fakeBucket();
+    await uploadImage(source, bucket);
+
+    const res = await app.request(`/admin/lotteries/${source}/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { updatedCount: number; updatedIds: number[] };
+    expect(body.updatedCount).toBe(0);
+    expect(body.updatedIds).toEqual([]);
+  });
+
+  it("画像未アップロードの抽選は422 VALIDATION_ERROR", async () => {
+    const title = `未アップロード-${Date.now()}`;
+    const source = await insertLottery({ productNameRaw: title, normalizedProductName: title });
+
+    const res = await app.request(`/admin/lotteries/${source}/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("商品名が未設定の抽選は422 VALIDATION_ERROR", async () => {
+    const source = await insertLottery({ productNameRaw: null, normalizedProductName: null });
+    const bucket = fakeBucket();
+    await uploadImage(source, bucket);
+
+    const res = await app.request(`/admin/lotteries/${source}/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("lifecycleStatusがactiveでない同名抽選は対象外", async () => {
+    const title = `非active混在-${Date.now()}`;
+    const source = await insertLottery({ productNameRaw: title, normalizedProductName: title });
+    const orphaned = await insertLottery({
+      productNameRaw: `${title}（孤立）`,
+      normalizedProductName: title,
+      lifecycleStatus: "orphaned",
+    });
+    const bucket = fakeBucket();
+    await uploadImage(source, bucket);
+
+    const res = await app.request(`/admin/lotteries/${source}/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    const body = (await res.json()) as { updatedIds: number[] };
+    expect(body.updatedIds).not.toContain(orphaned);
+
+    const orphanedRes = await app.request(`/admin/lotteries/${orphaned}`, { headers: authHeaders() });
+    const orphanedDetail = (await orphanedRes.json()) as { lottery: { imageUrl: string | null } };
+    expect(orphanedDetail.lottery.imageUrl).toBeNull();
+  });
+
+  it("存在しないidは404", async () => {
+    const res = await app.request(`/admin/lotteries/999999/image/apply-to-same-title`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("GET /admin/lotteries?search=", () => {
   it("商品名・店舗名の部分一致で絞り込める", async () => {
     await insertLottery({ productNameRaw: "重複統合検索用のメガドリームex", storeNameRaw: "ドラゴンスター" });

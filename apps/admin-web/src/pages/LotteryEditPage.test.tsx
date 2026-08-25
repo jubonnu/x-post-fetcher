@@ -381,6 +381,97 @@ describe("LotteryEditPage", () => {
     expect(apiRequestSpy).not.toHaveBeenCalledWith("/admin/lotteries/42/image", expect.objectContaining({ method: "DELETE" }));
   });
 
+  describe("同じ商品名の抽選すべてに反映（追加機能）", () => {
+    it("画像・商品名（正規化済み）が両方あればボタンが表示され、確認後にAPIを呼んで件数を表示する", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      const apiRequestSpy = vi.spyOn(client, "apiRequest").mockImplementation(async (path, options) => {
+        if (path === "/admin/lotteries/42" && !options) {
+          return {
+            lottery: makeLottery({ imageUrl: "https://example.com/images/42-123.png", normalizedProductName: "テスト商品" }),
+            sources: [],
+            fieldHistory: [],
+          } satisfies LotteryDetailResponse;
+        }
+        if (path === "/admin/lotteries/42/image/apply-to-same-title" && options?.method === "POST") {
+          return { ok: true, updatedCount: 3, updatedIds: [1, 2, 3] };
+        }
+        throw new Error(`unexpected path: ${path}`);
+      });
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      const button = await screen.findByRole("button", { name: "同じ商品名の抽選すべてに反映" });
+      fireEvent.click(button);
+
+      await waitFor(() =>
+        expect(apiRequestSpy).toHaveBeenCalledWith("/admin/lotteries/42/image/apply-to-same-title", { method: "POST" })
+      );
+      await screen.findByText("3件の抽選に反映しました");
+    });
+
+    it("確認をキャンセルするとAPIを呼ばない", async () => {
+      vi.spyOn(window, "confirm").mockReturnValue(false);
+      const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ imageUrl: "https://example.com/images/42-123.png", normalizedProductName: "テスト商品" }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      const button = await screen.findByRole("button", { name: "同じ商品名の抽選すべてに反映" });
+      fireEvent.click(button);
+
+      expect(apiRequestSpy).not.toHaveBeenCalledWith(
+        "/admin/lotteries/42/image/apply-to-same-title",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    it("画像が未設定なら一括反映ボタンを表示しない", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ imageUrl: null, normalizedProductName: "テスト商品" }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      expect(screen.queryByRole("button", { name: "同じ商品名の抽選すべてに反映" })).not.toBeInTheDocument();
+    });
+
+    it("正規化済み商品名が未設定なら一括反映ボタンを表示しない", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ imageUrl: "https://example.com/images/42-123.png", normalizedProductName: null }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      expect(screen.queryByRole("button", { name: "同じ商品名の抽選すべてに反映" })).not.toBeInTheDocument();
+    });
+
+    it("既存の単一アップロード・削除ボタンは引き続き表示される（追加機能であり置き換えではない）", async () => {
+      vi.spyOn(client, "apiRequest").mockResolvedValue({
+        lottery: makeLottery({ imageUrl: "https://example.com/images/42-123.png", normalizedProductName: "テスト商品" }),
+        sources: [],
+        fieldHistory: [],
+      } satisfies LotteryDetailResponse);
+
+      renderEditPage();
+      await screen.findByDisplayValue("テスト商品");
+
+      expect(screen.getByRole("button", { name: "画像を削除" })).toBeInTheDocument();
+      expect(document.querySelector('input[type="file"]')).not.toBeNull();
+      expect(screen.getByRole("button", { name: "同じ商品名の抽選すべてに反映" })).toBeInTheDocument();
+    });
+  });
+
   it("承認するボタンでPOST /admin/lotteries/:id/approveを呼び、一覧を再取得する", async () => {
     const apiRequestSpy = vi.spyOn(client, "apiRequest").mockResolvedValue({
       lottery: makeLottery(),

@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, getTableColumns, gte, isNull, like, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, getTableColumns, gte, inArray, isNull, like, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
 import type { ExtractedLottery } from "@x-post/shared";
 import type { Db, DbOrTx } from "../db/client.ts";
@@ -921,6 +921,41 @@ export async function updateLotteryByAdmin(db: DbOrTx, id: number, input: AdminL
   }
 
   await db.update(lotteries).set(patch).where(eq(lotteries.id, id));
+}
+
+/**
+ * 指定した抽選（`sourceId`）と同じ正規化商品名（`normalizedProductName`）を持つ他のactive抽選
+ * すべてへ、同じ画像URLを一括反映する（管理画面「同じ商品名すべてに反映」機能、追加機能）。
+ * 既存の単一抽選への画像アップロード/削除（`imageUrl`単体更新）はそのまま維持し、これは
+ * その結果（アップロード済みのURL）を横展開するだけの追加操作として扱う。
+ * `normalizedProductName`が空/nullの抽選は対象にしない（グループ化キーが無く、
+ * 無関係な抽選同士が誤って同一グループ扱いされるリスクがあるため）。
+ * `sourceId`自身は対象に含めない（既にアップロード時点で反映済みのため）。
+ */
+export async function bulkApplyLotteryImageByProductName(
+  db: DbOrTx,
+  sourceId: number,
+  normalizedProductName: string,
+  imageUrl: string
+): Promise<{ updatedIds: number[] }> {
+  const targets = await db
+    .select({ id: lotteries.id })
+    .from(lotteries)
+    .where(
+      and(
+        eq(lotteries.normalizedProductName, normalizedProductName),
+        eq(lotteries.lifecycleStatus, "active"),
+        ne(lotteries.id, sourceId)
+      )
+    );
+  const updatedIds = targets.map((t) => t.id);
+  if (updatedIds.length === 0) return { updatedIds };
+
+  await db
+    .update(lotteries)
+    .set({ imageUrl, updatedAt: new Date().toISOString() })
+    .where(inArray(lotteries.id, updatedIds));
+  return { updatedIds };
 }
 
 export interface AdminLotteryCreateInput {
