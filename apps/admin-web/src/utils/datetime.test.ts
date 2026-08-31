@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fromDatetimeLocalValue, toDatetimeLocalValue } from "./datetime";
+import { fromDatetimeLocalValue, isBareDateOnly, toDatetimeLocalValue } from "./datetime";
 
 describe("toDatetimeLocalValue / fromDatetimeLocalValue", () => {
   it("nullは空文字を返す", () => {
@@ -20,5 +20,23 @@ describe("toDatetimeLocalValue / fromDatetimeLocalValue", () => {
 
   it("不正な形式はnullを返す", () => {
     expect(fromDatetimeLocalValue("not-a-date")).toBeNull();
+  });
+
+  it("時刻の無い日付のみの文字列（'YYYY-MM-DD'）は空文字を返す（実在しない時刻を捏造しない）", () => {
+    expect(toDatetimeLocalValue("2026-09-06")).toBe("");
+  });
+});
+
+describe("isBareDateOnly", () => {
+  it("'YYYY-MM-DD'形式はtrue", () => {
+    expect(isBareDateOnly("2026-09-06")).toBe(true);
+  });
+
+  it("時刻付きISO文字列はfalse", () => {
+    expect(isBareDateOnly("2026-09-06T20:00:00+09:00")).toBe(false);
+  });
+
+  it("nullはfalse", () => {
+    expect(isBareDateOnly(null)).toBe(false);
   });
 });

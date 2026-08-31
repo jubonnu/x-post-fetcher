@@ -4,9 +4,14 @@ import { apiRequest, ApiError } from "../api/client";
 import { VerificationBadge } from "../components/VerificationBadge";
 import type { LotteryDetailResponse, LotteryListResponse, LotteryRow } from "../types";
 import type { LotteryFormState } from "./LotteryNewPage";
-import { fromDatetimeLocalValue, toDatetimeLocalValue } from "../utils/datetime";
+import { fromDatetimeLocalValue, isBareDateOnly, toDatetimeLocalValue } from "../utils/datetime";
 
 type FormState = LotteryFormState;
+
+/** "2026-09-06" のような日付のみの文字列を表示用に整形する（時刻情報が無いことを示す注記と併用する）。 */
+function formatDateOnly(value: string): string {
+  return value.replace(/-/g, "/");
+}
 
 function toFormState(lottery: LotteryRow): FormState {
   const urls =
@@ -369,6 +374,13 @@ export function LotteryEditPage() {
               onChange={(e) => updateField("applicationEndAt", e.target.value)}
             />
           </div>
+          {isBareDateOnly(lottery.applicationStartAt) || lottery.applicationEndDate ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              日付のみ(時刻不明):
+              {isBareDateOnly(lottery.applicationStartAt) ? ` 開始 ${formatDateOnly(lottery.applicationStartAt)}` : ""}
+              {lottery.applicationEndDate ? ` 締切 ${formatDateOnly(lottery.applicationEndDate)}` : ""}
+            </p>
+          ) : null}
         </div>
 
         <div className="field">
@@ -390,6 +402,13 @@ export function LotteryEditPage() {
               onChange={(e) => updateField("resultAnnouncementAt", e.target.value)}
             />
           </div>
+          {isBareDateOnly(lottery.resultAnnouncementStartAt) || lottery.resultAnnouncementDate ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              日付のみ(時刻不明):
+              {isBareDateOnly(lottery.resultAnnouncementStartAt) ? ` 開始 ${formatDateOnly(lottery.resultAnnouncementStartAt)}` : ""}
+              {lottery.resultAnnouncementDate ? ` 終了 ${formatDateOnly(lottery.resultAnnouncementDate)}` : ""}
+            </p>
+          ) : null}
         </div>
 
         <div className="field">
@@ -411,6 +430,13 @@ export function LotteryEditPage() {
               onChange={(e) => updateField("purchaseDeadlineAt", e.target.value)}
             />
           </div>
+          {isBareDateOnly(lottery.purchaseStartAt) || isBareDateOnly(lottery.purchaseDeadlineAt) ? (
+            <p className="muted" style={{ marginTop: 4 }}>
+              日付のみ(時刻不明):
+              {isBareDateOnly(lottery.purchaseStartAt) ? ` 開始 ${formatDateOnly(lottery.purchaseStartAt)}` : ""}
+              {isBareDateOnly(lottery.purchaseDeadlineAt) ? ` 期限 ${formatDateOnly(lottery.purchaseDeadlineAt)}` : ""}
+            </p>
+          ) : null}
         </div>
 
         <div className="field">
