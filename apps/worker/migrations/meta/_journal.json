@@ -183,6 +183,13 @@
       "when": 1787190713170,
       "tag": "0025_groovy_expediter",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1788169800270,
+      "tag": "0026_left_frank_castle",
+      "breakpoints": true
     }
   ]
 }

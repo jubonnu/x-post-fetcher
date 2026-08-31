@@ -78,3 +78,75 @@ export async function setScrapeAuthorState(db: Db, authorUsername: string, input
     .set({ needsRecovery: input.needsRecovery, ...cursorFields, updatedAt: now })
     .where(eq(scrapeAuthorStates.authorUsername, authorUsername));
 }
+
+export interface ClaudeCheckpoint {
+  authorUsername: string;
+  /** 最後にXで確認した投稿のID。「最後にDBへ保存した投稿」とは別概念（未保存の投稿でも設定できる）。 */
+  externalPostId: string | null;
+  publishedAt: string | null;
+  /** チェックポイントを更新した日時（サーバー側で設定）。 */
+  checkedAt: string | null;
+}
+
+/**
+ * 管理画面「Claude投入」用のチェックポイントを取得する。行が無い場合（未設定）は
+ * 全フィールドnullとして返す。
+ */
+export async function getClaudeCheckpoint(db: Db, authorUsername: string): Promise<ClaudeCheckpoint> {
+  const rows = await db
+    .select({
+      externalPostId: scrapeAuthorStates.claudeCheckedExternalPostId,
+      publishedAt: scrapeAuthorStates.claudeCheckedPublishedAt,
+      checkedAt: scrapeAuthorStates.claudeCheckedAt,
+    })
+    .from(scrapeAuthorStates)
+    .where(eq(scrapeAuthorStates.authorUsername, authorUsername))
+    .limit(1);
+  const row = rows[0];
+  return {
+    authorUsername,
+    externalPostId: row?.externalPostId ?? null,
+    publishedAt: row?.publishedAt ?? null,
+    checkedAt: row?.checkedAt ?? null,
+  };
+}
+
+export interface SetClaudeCheckpointInput {
+  externalPostId: string;
+  publishedAt: string;
+}
+
+/**
+ * チェックポイントを更新する（管理画面からの手動操作専用。scraperの自動実行からは呼ばない）。
+ * `checkedAt`はこの呼び出し時刻をサーバー側で設定する。既存行が無ければ新規作成する
+ * （`needsRecovery`はscraper側のデフォルトであるfalseで作成し、scraper自身の状態には触れない）。
+ */
+export async function setClaudeCheckpoint(db: Db, authorUsername: string, input: SetClaudeCheckpointInput): Promise<void> {
+  const now = new Date().toISOString();
+  const existing = await db
+    .select({ authorUsername: scrapeAuthorStates.authorUsername })
+    .from(scrapeAuthorStates)
+    .where(eq(scrapeAuthorStates.authorUsername, authorUsername))
+    .limit(1);
+
+  if (existing.length === 0) {
+    await db.insert(scrapeAuthorStates).values({
+      authorUsername,
+      needsRecovery: false,
+      claudeCheckedExternalPostId: input.externalPostId,
+      claudeCheckedPublishedAt: input.publishedAt,
+      claudeCheckedAt: now,
+      updatedAt: now,
+    });
+    return;
+  }
+
+  await db
+    .update(scrapeAuthorStates)
+    .set({
+      claudeCheckedExternalPostId: input.externalPostId,
+      claudeCheckedPublishedAt: input.publishedAt,
+      claudeCheckedAt: now,
+    })
+    .where(eq(scrapeAuthorStates.authorUsername, authorUsername));
+}

@@ -1,13 +1,12 @@
 import type { Hono } from "hono";
-import { IngestPayloadSchema } from "@x-post/shared";
 import type { AppEnv } from "../env.ts";
-import { upsertSourcePost } from "../repositories/sourcePostRepository.ts";
-import { persistAnalysis } from "../repositories/analysisRepository.ts";
+import { ingestPost } from "../services/ingestPost.ts";
 
 /**
  * POST /ingest — 内部取込API（Bearer 認証）。
  * sourcePost を upsert し、analysis があれば contentHash 判定のうえ永続化する
  * （同一 contentHash は reused、変われば inserted で再解析）。
+ * 検証・保存の実処理は`services/ingestPost.ts`（`/admin/claude-ingest`とも共有）に委譲する。
  */
 export function registerIngest(app: Hono<AppEnv>): void {
   app.post("/ingest", async (c) => {
@@ -26,51 +25,33 @@ export function registerIngest(app: Hono<AppEnv>): void {
       return c.json({ ok: false, error: "invalid_json" }, 400);
     }
 
-    // --- Zod 検証 ---
-    const parsed = IngestPayloadSchema.safeParse(body);
-    if (!parsed.success) {
-      return c.json({ ok: false, error: "validation_failed", issues: parsed.error.issues }, 422);
-    }
-
-    // --- sourcePost upsert（externalPostId / contentHash） ---
     const db = c.get("db");
-    let result;
-    try {
-      result = await upsertSourcePost(db, parsed.data.sourcePost);
-    } catch (e) {
-      return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 500);
-    }
+    const result = await ingestPost(db, body);
 
-    // --- analysis 永続化（あれば）。解析失敗でも sourcePost は保持済み ---
-    // アーカイブ済みsourcePostはlottery解析・再解析の対象外（要件: archivedから新規lottery/candidateを作らない）。
-    let analysis: { action: string; lotteryCount: number; lotteryResults?: unknown[] } | undefined;
-    if (parsed.data.analysis && result.archivedAt) {
-      analysis = { action: "skipped_archived", lotteryCount: 0 };
-    } else if (parsed.data.analysis) {
-      try {
-        analysis = await persistAnalysis(db, result.sourcePostId, parsed.data.analysis);
-      } catch (e) {
-        analysis = { action: "failed", lotteryCount: 0 };
-        console.error(`[ingest] analysis 永続化失敗: ${e instanceof Error ? e.message : e}`);
+    if (!result.ok) {
+      if (result.kind === "validation_failed") {
+        return c.json({ ok: false, error: "validation_failed", issues: result.issues }, 422);
       }
+      return c.json({ ok: false, error: result.message }, 500);
     }
 
     // 構造化ログ（rawHtml / cleanedHtml は出力しない）
     console.log(
       JSON.stringify({
-        batchId: parsed.data.batchId ?? null,
+        batchId: result.logFields.batchId,
         sourcePostId: result.sourcePostId,
         externalPostId: result.externalPostId,
         action: result.action,
-        postType: parsed.data.analysis?.postType ?? null,
-        isLotteryInformation: parsed.data.analysis?.isLotteryInformation ?? null,
-        analysisStatus: parsed.data.analysis?.analysisStatus ?? null,
-        extractedLotteryCount: parsed.data.analysis?.extractedLotteries?.length ?? 0,
-        analysisAction: analysis?.action ?? null,
-        lotteryResults: analysis?.lotteryResults ?? [],
+        postType: result.logFields.postType,
+        isLotteryInformation: result.logFields.isLotteryInformation,
+        analysisStatus: result.logFields.analysisStatus,
+        extractedLotteryCount: result.logFields.extractedLotteryCount,
+        analysisAction: result.analysis?.action ?? null,
+        lotteryResults: result.analysis?.lotteryResults ?? [],
       })
     );
 
-    return c.json({ ok: true, ...result, ...(analysis ? { analysis } : {}) });
+    const { logFields: _logFields, ok: _ok, ...rest } = result;
+    return c.json({ ok: true, ...rest });
   });
 }

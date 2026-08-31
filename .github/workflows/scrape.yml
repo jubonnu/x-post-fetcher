@@ -2,6 +2,9 @@ name: scrape-x
 
 # 5分間隔の cron + 手動実行。前回が実行中なら多重起動しない。
 on:
+  # 管理画面「Claude投入」でのE2E確認が終わるまでは無効化しない。
+  # 無効化する場合は、この`schedule`エントリだけを削除/コメントアウトする
+  # （`workflow_dispatch`は残し、手動実行はできるままにする）。
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch: {}

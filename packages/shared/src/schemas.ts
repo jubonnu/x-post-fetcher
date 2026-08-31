@@ -138,6 +138,56 @@ export const AnalysisInputSchema = z.object({
 });
 export type AnalysisInput = z.infer<typeof AnalysisInputSchema>;
 
+/**
+ * Claude in Chrome等で手動生成される抽選投稿JSONの入力スキーマ（管理画面「Claude投入」用）。
+ * 自動パイプライン（scraper）が送る`ExtractedLotterySchema`と異なり、日時系フィールドは
+ * フルの`ResolvedDate`オブジェクト（優先・情報欠落なし）か、ISO datetime文字列/"YYYY-MM-DD"の
+ * どちらかを受け付ける。どちらの形にも一致しない文字列（解釈不能な日付表現）は
+ * このスキーマの検証自体が失敗する（silentに"unknown"へ丸めない）。
+ */
+export const ClaudeResolvedDateOrStringSchema = z
+  .union([ResolvedDateSchema, z.string().datetime({ offset: true }), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)])
+  .nullable()
+  .default(null);
+
+export const ClaudeExtractedLotterySchema = z.object({
+  cardType: CardTypeSchema.default("unknown"),
+  productNameRaw: z.string().nullable().default(null),
+  storeNameRaw: z.string().nullable().default(null),
+  storeBranchRaw: z.string().nullable().default(null),
+  region: z.string().nullable().default(null),
+  applicationStart: ClaudeResolvedDateOrStringSchema,
+  applicationEnd: ClaudeResolvedDateOrStringSchema,
+  resultAnnouncementStart: ClaudeResolvedDateOrStringSchema,
+  resultAnnouncement: ClaudeResolvedDateOrStringSchema,
+  purchaseStart: ClaudeResolvedDateOrStringSchema,
+  purchaseDeadline: ClaudeResolvedDateOrStringSchema,
+  confirmedOpenAt: z.string().datetime({ offset: true }).nullable().default(null),
+  applicationUrl: z.string().nullable().default(null),
+  officialInformationUrl: z.string().nullable().default(null),
+  appDownloadUrl: z.string().nullable().default(null),
+  applicationMethod: z.string().nullable().default(null),
+  eligibilityConditions: z.string().nullable().default(null),
+  pickupMethod: z.string().nullable().default(null),
+  paymentMethod: z.string().nullable().default(null),
+  price: z.string().nullable().default(null),
+  notes: z.string().nullable().default(null),
+});
+export type ClaudeExtractedLottery = z.infer<typeof ClaudeExtractedLotterySchema>;
+
+export const ClaudePostInputSchema = z.object({
+  externalPostId: z.string().min(1),
+  sourceUrl: z.string().url(),
+  publishedAt: z.string().datetime({ offset: true }).nullable().default(null),
+  bodyRaw: z.string().default(""),
+  postType: PostTypeSchema,
+  isLotteryInformation: z.boolean(),
+  cardType: CardTypeSchema,
+  confidenceScore: z.number().min(0).max(1),
+  extractedLotteries: z.array(ClaudeExtractedLotterySchema).default([]),
+});
+export type ClaudePostInput = z.infer<typeof ClaudePostInputSchema>;
+
 export const IngestPayloadSchema = z.object({
   batchId: z.string().optional(),
   sourcePost: SourcePostInputSchema,

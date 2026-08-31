@@ -7,6 +7,7 @@ import { requireAuthConfigured } from "./auth/middleware.ts";
 import { publicApiCors } from "./publicCors.ts";
 import { registerAccountHardDeletionRetry } from "./routes/accountHardDeletionRetry.ts";
 import { registerAdminAuth } from "./routes/adminAuth.ts";
+import { registerAdminClaudeIngest } from "./routes/adminClaudeIngest.ts";
 import { registerAdminLotteries } from "./routes/adminLotteries.ts";
 import { registerAdminLotteryUpdateCandidates } from "./routes/adminLotteryUpdateCandidates.ts";
 import { registerAppleRevocationRetry } from "./routes/appleRevocationRetry.ts";
@@ -130,6 +131,7 @@ export function createApp(createDb: CreateDb) {
   app.use("/admin/*", adminApiCors());
   app.use("/admin/*", requireAdminAuthConfigured);
   registerAdminAuth(app);
+  registerAdminClaudeIngest(app);
   registerAdminLotteries(app);
   registerAdminLotteryUpdateCandidates(app);
 

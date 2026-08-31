@@ -247,6 +247,7 @@ export function LotteryListPage() {
           <div className="nav-links">
             <span className="muted">{admin?.email}</span>
             <Link to="/update-candidates">更新候補</Link>
+            <Link to="/claude-ingest">Claude投入</Link>
             <Link to="/change-password">パスワード変更</Link>
             <button type="button" className="secondary" onClick={logout}>
               ログアウト

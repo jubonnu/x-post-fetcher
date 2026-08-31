@@ -130,3 +130,28 @@ export interface LotteryUpdateCandidateDetailResponse {
   newSourcePost: SourcePostSummary | null;
   existingSourcePost: SourcePostSummary | null;
 }
+
+/** `/admin/claude-ingest/checkpoint`のレスポンス形状。 */
+export interface ClaudeCheckpoint {
+  authorUsername: string;
+  externalPostId: string | null;
+  publishedAt: string | null;
+  checkedAt: string | null;
+}
+
+/** `POST /admin/claude-ingest`の投稿1件あたりの結果。 */
+export interface ClaudeIngestItemResult {
+  externalPostId: string | null;
+  ok: boolean;
+  action?: "inserted" | "updated" | "unchanged";
+  sourcePostId?: number;
+  archivedAt?: string | null;
+  analysis?: { action: string; lotteryCount: number };
+  kind?: "validation_failed" | "server_error";
+  issues?: { path: (string | number)[]; message: string }[];
+  message?: string;
+}
+
+export interface ClaudeIngestResponse {
+  results: ClaudeIngestItemResult[];
+}

@@ -86,6 +86,15 @@ export const scrapeAuthorStates = sqliteTable("scrape_author_states", {
    */
   recoveryCursorExternalPostId: text("recovery_cursor_external_post_id"),
   recoveryCursorPublishedAt: text("recovery_cursor_published_at"),
+  /**
+   * Claude in Chrome等で手動にXを確認した際のチェックポイント（管理画面「Claude投入」用）。
+   * scraper自身のrecovery機構とは無関係の別概念（「最後にDBへ保存した抽選投稿」ではなく
+   * 「最後にXで確認した投稿」）。抽選対象外でDB非保存の投稿もチェックポイントにできる。
+   * 更新は管理画面からの手動操作のみで、scraperの自動実行からは一切書き換えない。
+   */
+  claudeCheckedExternalPostId: text("claude_checked_external_post_id"),
+  claudeCheckedPublishedAt: text("claude_checked_published_at"),
+  claudeCheckedAt: text("claude_checked_at"),
   updatedAt: text("updated_at")
     .notNull()
     .default(sql`CURRENT_TIMESTAMP`),

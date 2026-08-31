@@ -28,7 +28,7 @@ export function clearStoredToken(): void {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   /** 画像アップロード等、JSON以外の生バイナリを送る場合に使う。指定時は`body`をそのままfetchへ渡す。 */
   rawBody?: BodyInit;
