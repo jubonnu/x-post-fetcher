@@ -525,6 +525,8 @@ function endAtEpochExpr(atCol: AnySQLiteColumn, dateCol: AnySQLiteColumn): SQL<n
 export interface ListLotteriesOptions {
   cardType?: string;
   verificationStatus?: string;
+  /** 商品名・店舗名の部分一致検索（raw/normalized両方を対象、大文字小文字は区別）。 */
+  q?: string;
   limit?: number;
   /** キーセットページネーションの開始位置。null/undefinedなら先頭ページ。 */
   cursor?: LotteryListCursor | null;
@@ -558,7 +560,7 @@ export interface ListLotteriesResult {
  * その列を名前で参照する（CASE式を複数箇所に重複させない）。
  */
 export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions): Promise<ListLotteriesResult> {
-  const { cardType, verificationStatus, cursor = null, asOf } = opts;
+  const { cardType, verificationStatus, q, cursor = null, asOf } = opts;
   const limit = Math.min(Math.max(Number.isFinite(opts.limit) ? (opts.limit as number) : 20, 1), 100);
   const nowEpoch = Math.floor(new Date(asOf).getTime() / 1000);
 
@@ -570,6 +572,17 @@ export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions): Pro
     ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
     ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : []),
   ];
+  if (q && q.trim().length > 0) {
+    const pattern = `%${q.trim()}%`;
+    conditions.push(
+      or(
+        like(lotteries.productNameRaw, pattern),
+        like(lotteries.storeNameRaw, pattern),
+        like(lotteries.normalizedProductName, pattern),
+        like(lotteries.normalizedStoreName, pattern)
+      )!
+    );
+  }
   const where = and(...conditions);
 
   // CTE 1: 終了/発表時刻をエポック秒に正規化する（生SQLの重複を避けるための中間列）。

@@ -18,6 +18,7 @@ export function registerLotteries(app: Hono<AppEnv>): void {
     const db = c.get("db");
     const cardType = c.req.query("cardType") ?? undefined;
     const verificationStatus = c.req.query("verificationStatus") ?? undefined;
+    const q = c.req.query("q") ?? undefined;
     const rawLimit = Number(c.req.query("limit") ?? 20);
     const limit = Math.min(Math.max(Number.isFinite(rawLimit) ? rawLimit : 20, 1), 100);
 
@@ -50,7 +51,7 @@ export function registerLotteries(app: Hono<AppEnv>): void {
 
     const asOf = asOfQuery ?? new Date().toISOString();
 
-    const result = await listLotteries(db, { cardType, verificationStatus, limit, cursor, asOf });
+    const result = await listLotteries(db, { cardType, verificationStatus, q, limit, cursor, asOf });
     return c.json({
       ok: true,
       lotteries: result.lotteries.map(withParsedApplicationUrls),

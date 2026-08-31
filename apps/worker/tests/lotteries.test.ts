@@ -228,6 +228,67 @@ describe("GET /lotteries", () => {
     });
   });
 
+  describe("q パラメータ（商品名・店舗名の部分一致検索）", () => {
+    it("productNameRaw の部分一致でヒットする", async () => {
+      const res = await get(withAsOf("/lotteries?limit=100&q=acceptingN"));
+      const json: any = await res.json();
+      expect(json.lotteries.map((l: any) => l.normalizedProductName)).toEqual(["acceptingNear"]);
+    });
+
+    it("storeNameRaw の部分一致でヒットする（商品名・店舗名はOR）", async () => {
+      const res = await get(withAsOf("/lotteries?limit=100&q=ドラゴン"));
+      const json: any = await res.json();
+      const names = json.lotteries.map((l: any) => l.normalizedProductName).sort();
+      expect(names).toEqual(["acceptingFar", "acceptingNear"]);
+    });
+
+    it("マッチしない場合は空配列", async () => {
+      const res = await get(withAsOf("/lotteries?limit=100&q=存在しない文字列"));
+      const json: any = await res.json();
+      expect(json.lotteries).toEqual([]);
+      expect(json.total).toBe(0);
+    });
+
+    it("q が空文字なら未指定と同じ（絞り込まない）", async () => {
+      const baseline = await get(withAsOf("/lotteries?limit=100"));
+      const baselineJson: any = await baseline.json();
+
+      const res = await get(withAsOf("/lotteries?limit=100&q="));
+      const json: any = await res.json();
+      expect(json.lotteries).toHaveLength(baselineJson.lotteries.length);
+    });
+
+    it("needs_review/conflicting/rejected はqにマッチしても一覧に出ない", async () => {
+      const res = await get(withAsOf("/lotteries?limit=100&q=hidden"));
+      const json: any = await res.json();
+      expect(json.lotteries).toEqual([]);
+    });
+
+    it("q とキーセットページネーションを併用しても重複・欠落が無い", async () => {
+      const fullRes = await get(withAsOf("/lotteries?limit=100&q=e"));
+      const fullJson: any = await fullRes.json();
+      const fullIds = fullJson.lotteries.map((l: any) => l.id);
+      expect(fullIds.length).toBeGreaterThan(2);
+
+      const collected: number[] = [];
+      let cursor: string | null = null;
+      let guard = 0;
+      do {
+        const qs = new URLSearchParams({ limit: "2", asOf: ASOF, q: "e" });
+        if (cursor) qs.set("cursor", cursor);
+        const res = await get(`/lotteries?${qs.toString()}`);
+        expect(res.status).toBe(200);
+        const json: any = await res.json();
+        collected.push(...json.lotteries.map((l: any) => l.id));
+        cursor = json.nextCursor;
+        guard++;
+      } while (cursor && guard < 20);
+
+      expect(collected).toEqual(fullIds);
+      expect(new Set(collected).size).toBe(collected.length);
+    });
+  });
+
   describe("カーソルページネーション", () => {
     it("ページをまたいでも重複・欠落が無く、一括取得と同じ順序になる", async () => {
       const fullRes = await get(withAsOf("/lotteries?limit=100"));
