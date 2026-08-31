@@ -5,10 +5,31 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { migrate } from "drizzle-orm/libsql/migrator";
+import { PhotonImage } from "@cf-wasm/photon";
 import { createDb } from "../src/db/client.node.ts";
 import { createApp } from "../src/app.ts";
 import { lotteries, sourcePosts } from "../src/db/schema.ts";
 import type { Env } from "../src/env.ts";
+
+/** テスト用に指定サイズの単色PNGバイト列を作る（サムネイルリサイズのテスト用）。 */
+function createPngBytes(width: number, height: number): Uint8Array {
+  const rawPixels = new Uint8Array(width * height * 4).fill(128);
+  const image = new PhotonImage(rawPixels, width, height);
+  try {
+    return image.get_bytes();
+  } finally {
+    image.free();
+  }
+}
+
+function pngDimensions(bytes: Uint8Array): { width: number; height: number } {
+  const image = PhotonImage.new_from_byteslice(bytes);
+  try {
+    return { width: image.get_width(), height: image.get_height() };
+  } finally {
+    image.free();
+  }
+}
 
 const DB_FILE = resolve(process.cwd(), `.tmp-admin-lotteries-${Date.now()}.db`);
 
@@ -536,6 +557,50 @@ describe("POST /admin/lotteries/:id/image", () => {
     const detailRes = await app.request(`/admin/lotteries/${id}`, { headers: authHeaders() });
     const detail = (await detailRes.json()) as { lottery: { imageUrl: string } };
     expect(detail.lottery.imageUrl).toBe(uploadBody.imageUrl);
+  });
+
+  it("長辺が480pxを超える画像はリサイズされ、アスペクト比を保ったまま480px以下になる", async () => {
+    const id = await insertLottery();
+    const bucket = fakeBucket();
+    const original = createPngBytes(800, 600);
+
+    const uploadRes = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/png", ...authHeaders() }, body: original },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+    expect(uploadRes.status).toBe(200);
+    const uploadBody = (await uploadRes.json()) as { imageUrl: string };
+
+    const imagePath = new URL(uploadBody.imageUrl).pathname;
+    const imageRes = await app.request(imagePath, {}, { LOTTERY_IMAGES: bucket } as Partial<Env>);
+    const storedBytes = new Uint8Array(await imageRes.arrayBuffer());
+    expect(storedBytes.byteLength).toBeLessThan(original.byteLength);
+
+    const { width, height } = pngDimensions(storedBytes);
+    expect(Math.max(width, height)).toBe(480);
+    expect(width / height).toBeCloseTo(800 / 600, 2);
+  });
+
+  it("長辺が480px以下の画像はリサイズされない", async () => {
+    const id = await insertLottery();
+    const bucket = fakeBucket();
+    const original = createPngBytes(60, 40);
+
+    const uploadRes = await app.request(
+      `/admin/lotteries/${id}/image`,
+      { method: "POST", headers: { "Content-Type": "image/png", ...authHeaders() }, body: original },
+      { LOTTERY_IMAGES: bucket } as Partial<Env>
+    );
+    const uploadBody = (await uploadRes.json()) as { imageUrl: string };
+
+    const imagePath = new URL(uploadBody.imageUrl).pathname;
+    const imageRes = await app.request(imagePath, {}, { LOTTERY_IMAGES: bucket } as Partial<Env>);
+    const storedBytes = new Uint8Array(await imageRes.arrayBuffer());
+
+    const { width, height } = pngDimensions(storedBytes);
+    expect(width).toBe(60);
+    expect(height).toBe(40);
   });
 
   it("対応していない形式（例: image/gif）は422 VALIDATION_ERROR", async () => {

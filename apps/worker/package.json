@@ -14,6 +14,7 @@
     "e2e:server": "rm -f e2e-test.db && node src/migrate.ts && node src/node-server.ts"
   },
   "dependencies": {
+    "@cf-wasm/photon": "^0.4.0",
     "@libsql/client": "^0.14.0",
     "@x-post/shared": "*",
     "drizzle-orm": "^0.36.0",

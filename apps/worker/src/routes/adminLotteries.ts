@@ -17,6 +17,7 @@ import {
   type AdminLotteryUpdateInput,
 } from "../repositories/lotteryRepository.ts";
 import type { AppEnv } from "../env.ts";
+import { resizeImageForThumbnail } from "../services/imageThumbnail.ts";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
@@ -228,8 +229,10 @@ export function registerAdminLotteries(app: Hono<AppEnv>): void {
       return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "画像サイズが上限（5MB）を超えています"));
     }
 
+    const thumbnail = resizeImageForThumbnail(bytes, contentType);
+
     const key = `${id}-${Date.now()}.${extension}`;
-    await bucket.put(key, bytes, { httpMetadata: { contentType } });
+    await bucket.put(key, thumbnail.bytes, { httpMetadata: { contentType: thumbnail.contentType } });
 
     // モバイルアプリはこのURLをそのまま`<Image>`へ渡すだけなので、相対パスではなく
     // このWorker自身のoriginを含む絶対URLで保存する（このリクエストが実際に届いたoriginを使う
