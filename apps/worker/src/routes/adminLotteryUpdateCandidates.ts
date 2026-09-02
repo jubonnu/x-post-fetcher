@@ -13,6 +13,7 @@ import {
   registerLotteryUpdateCandidateAsNew,
 } from "../repositories/lotteryUpdateCandidateRepository.ts";
 import { withParsedApplicationUrls } from "../repositories/lotteryRepository.ts";
+import { autoResolveLotteryUpdateCandidate } from "../services/autoResolveLotteryUpdateCandidate.ts";
 import type { AppEnv } from "../env.ts";
 
 const listQuerySchema = z.object({
@@ -22,6 +23,7 @@ const listQuerySchema = z.object({
 });
 
 const applyBodySchema = z.object({ fields: z.array(z.string().min(1)).min(1) });
+const autoResolveBodySchema = z.object({ dryRun: z.boolean() });
 
 function parseId(idParam: string | undefined): number | null {
   const id = Number(idParam);
@@ -126,6 +128,34 @@ export function registerAdminLotteryUpdateCandidates(app: Hono<AppEnv>): void {
     }
     if (result === "no_fields_selected") {
       return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "反映可能なフィールドが選択されていません"));
+    }
+    return c.json(result);
+  });
+
+  /**
+   * 更新候補1件の自動判定（Phase後追い）。既存の`addable/overwritable/conflictingFields`分類と
+   * 候補の元データがClaude in Chrome由来かどうかから、安全に自動処理してよいかを判定する。
+   * まとめて処理せず1件ずつ呼ぶ設計にしているのは、Cloudflare Workersの1リクエストあたり
+   * サブリクエスト数上限を避けるため（呼び出し側でIDごとにループする）。
+   */
+  app.post("/admin/lottery-update-candidates/:id/auto-resolve", requireAdminAuth, async (c) => {
+    const id = parseId(c.req.param("id"));
+    if (id === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "idが不正です"));
+
+    const body = await parseJsonBody(c);
+    if (body === null) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "リクエストボディが不正です"));
+    const parsed = autoResolveBodySchema.safeParse(body);
+    if (!parsed.success) return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "dryRunが不正です"));
+
+    const db = c.get("db");
+    const result = await autoResolveLotteryUpdateCandidate(db, id, parsed.data.dryRun);
+
+    if (!result.ok) {
+      if (result.error === "candidate_not_found") return apiErrorJson(c, new ApiError("NOT_FOUND", "更新候補が見つかりません"));
+      if (result.error === "candidate_already_resolved") {
+        return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "この更新候補は既に処理済みです"));
+      }
+      return apiErrorJson(c, new ApiError("VALIDATION_ERROR", "自動反映に失敗しました"));
     }
     return c.json(result);
   });

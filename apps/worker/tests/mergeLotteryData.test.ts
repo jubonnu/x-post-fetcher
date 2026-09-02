@@ -76,4 +76,51 @@ describe("mergeLotteryData", () => {
     expect(r.hasConflict).toBe(true);
     expect(r.verificationStatus).toBe("conflicting");
   });
+
+  it("日時系スカラー項目: タイムゾーン表記が違うだけの同一瞬間は競合にならない（本番実データで確認された偽競合）", () => {
+    const a = { ...existing, applicationStartAt: "2026-08-27T01:00:00.000Z" };
+    const b = { ...existing, applicationStartAt: "2026-08-27T10:00:00+09:00" };
+    const r = mergeLotteryData(a, b);
+    expect(r.hasConflict).toBe(false);
+    expect(r.changes).toHaveLength(0);
+  });
+
+  it("日時系スカラー項目: 実際に異なる瞬間なら競合のまま", () => {
+    const a = { ...existing, applicationStartAt: "2026-08-27T01:00:00.000Z" };
+    const b = { ...existing, applicationStartAt: "2026-08-28T01:00:00.000Z" };
+    const r = mergeLotteryData(a, b);
+    expect(r.hasConflict).toBe(true);
+  });
+
+  it("日付グループのat: 同精度でタイムゾーン表記が違うだけの同一瞬間は競合にならない", () => {
+    const a = {
+      ...existing,
+      applicationEndAt: "2026-08-27T01:00:00.000Z",
+      applicationEndDate: "2026-08-27",
+      applicationEndPrecision: "datetime",
+    };
+    const b = {
+      ...existing,
+      applicationEndAt: "2026-08-27T10:00:00+09:00",
+      applicationEndDate: "2026-08-27",
+      applicationEndPrecision: "datetime",
+    };
+    const r = mergeLotteryData(a, b);
+    expect(r.hasConflict).toBe(false);
+  });
+
+  it("URL系項目: トラッキング用クエリパラメータの有無だけの違いは競合にならない（本番実データで確認された偽競合）", () => {
+    const a = { ...existing, applicationUrl: "https://books.rakuten.co.jp/rb/18537075/?bkts=1&l-id=search-c-item-01" };
+    const b = { ...existing, applicationUrl: "https://books.rakuten.co.jp/rb/18537075/" };
+    const r = mergeLotteryData(a, b);
+    expect(r.hasConflict).toBe(false);
+    expect(r.changes).toHaveLength(0);
+  });
+
+  it("URL系項目: パスが異なるURLは引き続き競合", () => {
+    const a = { ...existing, applicationUrl: "https://books.rakuten.co.jp/rb/18537075/" };
+    const b = { ...existing, applicationUrl: "https://books.rakuten.co.jp/rb/99999999/" };
+    const r = mergeLotteryData(a, b);
+    expect(r.hasConflict).toBe(true);
+  });
 });

@@ -61,6 +61,59 @@ export const SCALAR_FIELDS = [
   "price",
 ] as const;
 
+/**
+ * ISO datetime文字列を保持するスカラー項目（DATE_GROUPSのような専用precisionカラムを
+ * 持たないもの）。単純な文字列比較だと、同じ瞬間でもタイムゾーン表記が違うだけで
+ * （例: "2026-08-27T01:00:00.000Z" と "2026-08-27T10:00:00+09:00"、実際は同一瞬間）
+ * 別々の値として「競合」判定されてしまうため、実際の時刻（エポックms）で比較する。
+ */
+const DATETIME_SCALAR_FIELDS = new Set([
+  "applicationStartAt",
+  "confirmedOpenAt",
+  "resultAnnouncementStartAt",
+  "purchaseStartAt",
+  "purchaseDeadlineAt",
+  // DATE_GROUPSの`at`側（同精度どうしの一致判定）でも使うため含める。
+  "applicationEndAt",
+  "resultAnnouncementAt",
+]);
+
+/**
+ * URLを保持するスカラー項目。同じ応募ページでも、計測用クエリパラメータ
+ * （`?bkts=1&l-id=...`等）の有無だけで別の値として「競合」判定されてしまうため、
+ * オリジン+パスのみで比較する（クエリ文字列自体がページ内容を左右するURLは想定していない）。
+ */
+const URL_SCALAR_FIELDS = new Set(["applicationUrl", "officialInformationUrl", "appDownloadUrl"]);
+
+function sameUrl(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    return ua.origin === ub.origin && ua.pathname === ub.pathname;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 2つの値が「実質的に同じ」かどうかを判定する（完全一致の文字列比較だけでは、
+ * タイムゾーン表記・トラッキングパラメータの違いだけで偽の競合になってしまうフィールドがあるため）。
+ * `mergeLotteryData`の競合判定と、更新候補UIの一致フィールド判定（`computeMatchingFields`）の
+ * 両方から使う。
+ */
+export function isSameFieldValue(field: string, a: string, b: string): boolean {
+  if (a === b) return true;
+  if (DATETIME_SCALAR_FIELDS.has(field)) {
+    const ta = Date.parse(a);
+    const tb = Date.parse(b);
+    if (!Number.isNaN(ta) && !Number.isNaN(tb)) return ta === tb;
+  }
+  if (URL_SCALAR_FIELDS.has(field)) {
+    return sameUrl(a, b);
+  }
+  return false;
+}
+
 /** 日付精度のランク（高いほど確度が高い）。 */
 function precisionRank(p: string | null): number {
   switch (p) {
@@ -99,7 +152,7 @@ export function mergeLotteryData(existing: Row, incoming: Row): MergeResult {
     const newV = s(incoming[f]);
     if (newV === null) continue; // 新規に情報なし
     if (oldV === null) fill(f, null, newV); // 空欄補完
-    else if (oldV === newV) continue; // 同値
+    else if (isSameFieldValue(f, oldV, newV)) continue; // 実質同値（表記違いを含む）
     else conflict(f, oldV, newV); // 競合 → 既存維持
   }
 
@@ -136,8 +189,9 @@ export function mergeLotteryData(existing: Row, incoming: Row): MergeResult {
       // 低精度は破棄（高精度を壊さない）
       continue;
     } else {
-      // 同精度で値が異なれば競合、同じならスキップ
-      if (oldAt !== newAt || oldDate !== newDate) conflict(g.date, oldDate ?? oldAt, newDate ?? newAt);
+      // 同精度で値が異なれば競合、同じならスキップ（atはタイムゾーン表記違いを同一視する）
+      const atSame = oldAt !== null && newAt !== null ? isSameFieldValue(g.at, oldAt, newAt) : oldAt === newAt;
+      if (!atSame || oldDate !== newDate) conflict(g.date, oldDate ?? oldAt, newDate ?? newAt);
     }
   }
 

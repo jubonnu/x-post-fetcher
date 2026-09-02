@@ -83,6 +83,17 @@ export interface LotteryUpdateCandidateListResponse {
   total: number;
 }
 
+/** `POST /admin/lottery-update-candidates/:id/auto-resolve`のレスポンス。 */
+export interface AutoResolveCandidateResult {
+  candidateId: number;
+  decision: {
+    action: "apply" | "ignore" | "skip";
+    fields: string[];
+    reason: string;
+  };
+  applied: boolean;
+}
+
 /** 抽出済みデータ（`toLotteryRow`と同形）。差分表示用に必要なフィールドのみ宣言する。 */
 export interface ExtractedLotteryData {
   productNameRaw: string | null;

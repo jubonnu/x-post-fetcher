@@ -9,7 +9,7 @@ import {
   type LotteryRow,
   type LotteryUpdateCandidateRow,
 } from "../db/schema.ts";
-import { DATE_GROUPS, SCALAR_FIELDS, mergeLotteryData, type FieldChange } from "../services/mergeLotteryData.ts";
+import { DATE_GROUPS, SCALAR_FIELDS, isSameFieldValue, mergeLotteryData, type FieldChange } from "../services/mergeLotteryData.ts";
 import type { toLotteryRow } from "./lotteryRepository.ts";
 
 /** `toLotteryRow` と同形（正規化済み商品名・店舗名を含む抽出済み抽選データ）。 */
@@ -171,13 +171,13 @@ function computeMatchingFields(
     if (changedFieldNames.has(f)) continue;
     const a = sv(target[f]);
     const b = sv(incoming[f]);
-    if (a !== null && b !== null && a === b) matching.push(f);
+    if (a !== null && b !== null && isSameFieldValue(f, a, b)) matching.push(f);
   }
   for (const g of DATE_GROUPS) {
     if (changedFieldNames.has(g.date)) continue;
     const a = sv(target[g.date]) ?? sv(target[g.at]);
     const b = sv(incoming[g.date]) ?? sv(incoming[g.at]);
-    if (a !== null && b !== null && a === b) matching.push(g.date);
+    if (a !== null && b !== null && isSameFieldValue(g.at, a, b)) matching.push(g.date);
   }
   return matching;
 }

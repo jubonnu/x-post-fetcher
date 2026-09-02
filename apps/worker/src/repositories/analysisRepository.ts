@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import type { AnalysisInput } from "@x-post/shared";
 import type { Db } from "../db/client.ts";
 import { lotteries, postAnalyses, type PostAnalysisRow } from "../db/schema.ts";
@@ -24,6 +24,20 @@ export function decideAnalysisAction(priors: PostAnalysisRow[], incoming: Analys
       (p.parserVersion ?? null) === (incoming.parserVersion ?? null)
   );
   return exists ? "reused" : "inserted";
+}
+
+/**
+ * 指定sourcePostIdの最新解析（analyzedAt/id降順）のparserVersionを返す。無ければnull。
+ * 更新候補の自動判定（Claude in Chrome由来かどうかの判定）に使う（services/autoResolveLotteryUpdateCandidates.ts）。
+ */
+export async function getLatestParserVersion(db: Db, sourcePostId: number): Promise<string | null> {
+  const rows = await db
+    .select({ parserVersion: postAnalyses.parserVersion })
+    .from(postAnalyses)
+    .where(eq(postAnalyses.sourcePostId, sourcePostId))
+    .orderBy(desc(postAnalyses.id))
+    .limit(1);
+  return rows[0]?.parserVersion ?? null;
 }
 
 async function priorSourceLotteryCount(db: Db, sourcePostId: number): Promise<number> {
