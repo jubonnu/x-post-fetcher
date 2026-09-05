@@ -23,7 +23,7 @@ export function adminApiCors() {
       const allowed = getAdminWebOrigins(env ?? {});
       return origin && allowed.includes(origin) ? origin : undefined;
     },
-    allowMethods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allowMethods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
     allowHeaders: ["Content-Type", "Authorization"],
     credentials: false,
   });
