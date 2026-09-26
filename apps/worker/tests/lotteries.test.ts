@@ -6,6 +6,8 @@
  * - 日付のみ（application_end_date等）の値はJSTの日付境界（翌日0時JSTでended）で解釈する
  *   （CardHubモバイル側 utils/time.ts の normalizeDeadline と同一ルール）。
  * - ページネーションはキーセット（cursor + asOf）方式。asOfはステータス分類の基準時刻を固定する。
+ * - 公開されるのは verificationStatus="approved" のみ（管理画面で承認するまでは
+ *   extracted/needs_review/conflicting/rejected いずれも非公開）。
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { rmSync } from "node:fs";
@@ -46,7 +48,7 @@ beforeAll(async () => {
         normalizedProductName: "acceptingNear",
         cardType: "pokemon",
         storeNameRaw: "ドラゴンスター",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
         applicationEndAt: "2026-08-05T00:00:00.000Z",
       },
@@ -55,7 +57,7 @@ beforeAll(async () => {
         normalizedProductName: "acceptingFar",
         cardType: "pokemon",
         storeNameRaw: "ドラゴンスター",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
         applicationEndAt: "2026-08-20T00:00:00.000Z",
       },
@@ -64,10 +66,18 @@ beforeAll(async () => {
         normalizedProductName: "resultPending",
         cardType: "pokemon",
         storeNameRaw: "ホビーステーション",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
         applicationEndAt: "2026-08-01T00:00:00.000Z",
         resultAnnouncementAt: "2026-08-10T00:00:00.000Z",
+      },
+      {
+        productNameRaw: "hiddenExtracted",
+        normalizedProductName: "hiddenExtracted",
+        cardType: "pokemon",
+        storeNameRaw: "ホビーステーション",
+        verificationStatus: "extracted",
+        status: "open",
       },
       {
         productNameRaw: "hiddenNeedsReview",
@@ -98,7 +108,7 @@ beforeAll(async () => {
         normalizedProductName: "endedNew",
         cardType: "onepiece",
         storeNameRaw: "カードラッシュ",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
         applicationEndAt: "2026-07-20T00:00:00.000Z",
         resultAnnouncementAt: "2026-07-25T00:00:00.000Z",
@@ -108,7 +118,7 @@ beforeAll(async () => {
         normalizedProductName: "endedOld",
         cardType: "onepiece",
         storeNameRaw: "カードラッシュ",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
         applicationEndAt: "2026-07-01T00:00:00.000Z",
         resultAnnouncementAt: "2026-07-05T00:00:00.000Z",
@@ -118,7 +128,7 @@ beforeAll(async () => {
         normalizedProductName: "unknown",
         cardType: "onepiece",
         storeNameRaw: "カードラッシュ",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
       },
     ])
@@ -153,26 +163,21 @@ describe("GET /lotteries", () => {
     expect(json.lotteries.every((l: any) => l.cardType === "pokemon")).toBe(true);
   });
 
-  it("verificationStatus フィルタで extracted を明示指定しても hidden 系は混ざらない", async () => {
+  it("verificationStatus クエリはもう受け付けない（渡しても無視され、承認済みのみが返る）", async () => {
     const res = await get(withAsOf("/lotteries?verificationStatus=extracted&limit=100"));
     const json: any = await res.json();
     expect(json.lotteries).toHaveLength(6);
-    expect(json.lotteries.every((l: any) => l.verificationStatus === "extracted")).toBe(true);
+    expect(json.lotteries.every((l: any) => l.verificationStatus === "approved")).toBe(true);
   });
 
-  it("needs_review/conflicting/rejected は一覧から除外される（?verificationStatus指定でも見えない）", async () => {
+  it("extracted/needs_review/conflicting/rejected は一覧から除外される（承認済みのみ公開）", async () => {
     const res = await get(withAsOf("/lotteries?limit=100"));
     const json: any = await res.json();
     const names = json.lotteries.map((l: any) => l.normalizedProductName);
+    expect(names).not.toContain("hiddenExtracted");
     expect(names).not.toContain("hiddenNeedsReview");
     expect(names).not.toContain("hiddenConflicting");
     expect(names).not.toContain("hiddenRejected");
-
-    for (const status of ["needs_review", "conflicting", "rejected"]) {
-      const filtered = await get(withAsOf(`/lotteries?verificationStatus=${status}&limit=100`));
-      const filteredJson: any = await filtered.json();
-      expect(filteredJson.lotteries).toHaveLength(0);
-    }
   });
 
   it("limit は最大 100 に制限される", async () => {
@@ -198,7 +203,7 @@ describe("GET /lotteries", () => {
           productNameRaw: "dateOnlyBoundary",
           normalizedProductName: "dateOnlyBoundary",
           cardType: "boundary",
-          verificationStatus: "extracted",
+          verificationStatus: "approved",
           status: "open",
           applicationEndDate: "2026-08-03",
         })
@@ -258,7 +263,7 @@ describe("GET /lotteries", () => {
       expect(json.lotteries).toHaveLength(baselineJson.lotteries.length);
     });
 
-    it("needs_review/conflicting/rejected はqにマッチしても一覧に出ない", async () => {
+    it("extracted/needs_review/conflicting/rejected はqにマッチしても一覧に出ない", async () => {
       const res = await get(withAsOf("/lotteries?limit=100&q=hidden"));
       const json: any = await res.json();
       expect(json.lotteries).toEqual([]);
@@ -391,7 +396,7 @@ describe("GET /lotteries/:id", () => {
         productNameRaw: "複数URLテスト",
         normalizedProductName: "複数URLテスト",
         storeNameRaw: "テスト店舗",
-        verificationStatus: "extracted",
+        verificationStatus: "approved",
         status: "open",
         applicationUrls: JSON.stringify(["https://example.com/a", "https://example.com/b"]),
       })
@@ -408,8 +413,8 @@ describe("GET /lotteries/:id", () => {
     expect(json.lottery.applicationUrls).toBeNull();
   });
 
-  it("needs_review/conflicting/rejected はID直指定でも404（一覧に出ない抽選をID推測で見られない）", async () => {
-    for (const name of ["hiddenNeedsReview", "hiddenConflicting", "hiddenRejected"]) {
+  it("extracted/needs_review/conflicting/rejected はID直指定でも404（一覧に出ない抽選をID推測で見られない）", async () => {
+    for (const name of ["hiddenExtracted", "hiddenNeedsReview", "hiddenConflicting", "hiddenRejected"]) {
       const res = await get(`/lotteries/${ids[name]}`);
       expect(res.status).toBe(404);
     }

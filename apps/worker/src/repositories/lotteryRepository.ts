@@ -42,9 +42,10 @@ function verification(l: ExtractedLottery): string {
   return fields.some((f) => f.status === "conflicting") ? "conflicting" : "extracted";
 }
 
-/** 公開（アプリ向け）では見せない verificationStatus。
- * 却下済みに加え、要確認・矛盾ありの曖昧なデータは承認されるまで管理画面のみで確認する運用のため。 */
-const PUBLIC_HIDDEN_VERIFICATION_STATUSES: string[] = ["rejected", "needs_review", "conflicting"];
+/** 公開（アプリ向け）で見せる verificationStatus。
+ * 管理画面で承認したものだけをアプリに出す運用のため、承認済み以外（AI抽出直後の
+ * extracted・要確認・矛盾あり・却下済み）はすべて非公開とする。 */
+const PUBLIC_VERIFICATION_STATUS = "approved";
 
 /** 応募ページURLの配列をDB保存用のJSON文字列へ（空配列/未指定はnull）。 */
 function serializeApplicationUrls(urls: string[] | null | undefined): string | null {
@@ -524,7 +525,6 @@ function endAtEpochExpr(atCol: AnySQLiteColumn, dateCol: AnySQLiteColumn): SQL<n
 
 export interface ListLotteriesOptions {
   cardType?: string;
-  verificationStatus?: string;
   /** 商品名・店舗名の部分一致検索（raw/normalized両方を対象、大文字小文字は区別）。 */
   q?: string;
   limit?: number;
@@ -560,17 +560,16 @@ export interface ListLotteriesResult {
  * その列を名前で参照する（CASE式を複数箇所に重複させない）。
  */
 export async function listLotteries(db: DbOrTx, opts: ListLotteriesOptions): Promise<ListLotteriesResult> {
-  const { cardType, verificationStatus, q, cursor = null, asOf } = opts;
+  const { cardType, q, cursor = null, asOf } = opts;
   const limit = Math.min(Math.max(Number.isFinite(opts.limit) ? (opts.limit as number) : 20, 1), 100);
   const nowEpoch = Math.floor(new Date(asOf).getTime() / 1000);
 
   const conditions = [
-    // rejected/needs_review/conflicting は公開しない（承認済み運用: 曖昧なデータは管理画面のみで確認する）
-    notInArray(lotteries.verificationStatus, PUBLIC_HIDDEN_VERIFICATION_STATUSES),
+    // 承認済みのみ公開する（管理画面で承認するまでアプリには出さない運用）
+    eq(lotteries.verificationStatus, PUBLIC_VERIFICATION_STATUS),
     // orphaned / archived は公開しない
     eq(lotteries.lifecycleStatus, "active"),
     ...(cardType ? [eq(lotteries.cardType, cardType)] : []),
-    ...(verificationStatus ? [eq(lotteries.verificationStatus, verificationStatus)] : []),
   ];
   if (q && q.trim().length > 0) {
     const pattern = `%${q.trim()}%`;
@@ -738,14 +737,14 @@ export async function getLotteryWithDetails(db: DbOrTx, id: number): Promise<Lot
   return fetchLotteryWithDetailsByCondition(db, eq(lotteries.id, id));
 }
 
-/** 公開 GET /lotteries/:id 用。listLotteries と同じ基準（rejected/needs_review/conflicting +
- * 非active除外）でフィルタする。一覧に出ない抽選をID直指定で見られてしまう抜け穴を防ぐ。 */
+/** 公開 GET /lotteries/:id 用。listLotteries と同じ基準（承認済み + active）でフィルタする。
+ * 一覧に出ない抽選をID直指定で見られてしまう抜け穴を防ぐ。 */
 export async function getPublicLotteryWithDetails(db: DbOrTx, id: number): Promise<LotteryWithDetails | null> {
   return fetchLotteryWithDetailsByCondition(
     db,
     and(
       eq(lotteries.id, id),
-      notInArray(lotteries.verificationStatus, PUBLIC_HIDDEN_VERIFICATION_STATUSES),
+      eq(lotteries.verificationStatus, PUBLIC_VERIFICATION_STATUS),
       eq(lotteries.lifecycleStatus, "active")
     )
   );
