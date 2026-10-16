@@ -45,7 +45,11 @@ export interface StatusHistoryEvent {
  *    過去分を「当選して購入済み」として一括記録する運用を想定）。
  * 3. `won`後の`purchased`/`skipped`は同一試行の追加状態（`purchaseState`）として扱う。
  * 4. `purchased→won`（訂正入力）は新規試行を作らず、`purchaseState`を`null`に戻す
- *    （当選実績＝`result`は変えない）。`skipped→won`も同様のロジックで処理できるが、
+ *    （当選実績＝`result`は変えない）。同様に`lost→applied`（落選の誤記録を訂正する入力）も
+ *    新規試行を作らず、同一試行の`result`/`resultAt`を`null`に戻す（結果未確定の状態へ巻き戻す）。
+ *    これにより、訂正後に実際の結果（`won`/`lost`）が確定しても同一試行として扱われ、
+ *    誤って記録した`lost`と実際の結果の両方が二重にカウントされることを防ぐ。
+ *    `skipped→won`も同様のロジックで処理できるが、
  *    現在の状態遷移ホワイトリスト（`lotteryStatusTransitions.ts`）は`skipped → planned`
  *    のみを許可しており、`skipped→won`は意図的に禁止している（`skipped`が「応募前の見送り」
  *    と「当選後の購入見送り」の2つの意味を持つ単一status設計のまま許可すると誤集計の
@@ -85,6 +89,12 @@ function reconstructAttemptsForOneLottery(lotteryId: number, events: readonly St
     switch (event.toStatus) {
       case "applied": {
         if (open && open.result === null) break; // 同一試行内の重複appliedイベントは無視
+        if (open && open.result === "lost" && event.fromStatus === "lost") {
+          // 落選の誤記録を訂正する入力: 新規試行を作らず、結果未確定の状態へ巻き戻す
+          open.result = null;
+          open.resultAt = null;
+          break;
+        }
         closeOpenAttempt();
         open = { lotteryId, startedAt: event.changedAt, result: null, resultAt: null, purchaseState: null, purchaseAt: null };
         break;

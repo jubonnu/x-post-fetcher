@@ -117,6 +117,25 @@ describe("PUT /me/lotteries/:lotteryId", () => {
     const create = await app.request(`/me/lotteries/${lotteryId}`, {
       method: "PUT",
       headers: authHeaders(accessToken),
+      body: JSON.stringify({ status: "won", clientRequestId: crypto.randomUUID() }),
+    });
+    const createBody = await create.json();
+
+    // won → appliedは許可されていない遷移（wonからはpurchased/skippedのみ許可）
+    const res = await app.request(`/me/lotteries/${lotteryId}`, {
+      method: "PUT",
+      headers: authHeaders(accessToken),
+      body: JSON.stringify({ status: "applied", expectedServerVersion: createBody.serverVersion, clientRequestId: crypto.randomUUID() }),
+    });
+    expect(res.status).toBe(422);
+  });
+
+  it("lost→appliedは落選の誤記録を訂正する遷移として許可される", async () => {
+    const { accessToken } = await loginAs("sub-lot-lost-correction", "device-1");
+    const lotteryId = await insertLottery();
+    const create = await app.request(`/me/lotteries/${lotteryId}`, {
+      method: "PUT",
+      headers: authHeaders(accessToken),
       body: JSON.stringify({ status: "lost", clientRequestId: crypto.randomUUID() }),
     });
     const createBody = await create.json();
@@ -126,7 +145,9 @@ describe("PUT /me/lotteries/:lotteryId", () => {
       headers: authHeaders(accessToken),
       body: JSON.stringify({ status: "applied", expectedServerVersion: createBody.serverVersion, clientRequestId: crypto.randomUUID() }),
     });
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("applied");
   });
 
   it("expectedServerVersion不一致は409 VERSION_CONFLICTでサーバー側の現在値を返す", async () => {

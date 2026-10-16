@@ -71,6 +71,27 @@ describe("reconstructAttempts", () => {
     expect(attempts[0]).toMatchObject({ result: "won", purchaseState: "purchased", purchaseAt: "2026-08-03T00:00:00.000Z" });
   });
 
+  it("applied→lost→applied: 落選の誤記録を訂正する入力は新規試行を作らず、結果未確定の状態に戻す", () => {
+    const attempts = reconstructAttempts([
+      ev("unknown", "applied", "2026-08-01T00:00:00.000Z"),
+      ev("applied", "lost", "2026-08-02T00:00:00.000Z"),
+      ev("lost", "applied", "2026-08-03T00:00:00.000Z"),
+    ]);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ startedAt: "2026-08-01T00:00:00.000Z", result: null, resultAt: null });
+  });
+
+  it("applied→lost→applied→won: 訂正後に実際の結果が確定しても1試行（当選のみ）として数える", () => {
+    const attempts = reconstructAttempts([
+      ev("unknown", "applied", "2026-08-01T00:00:00.000Z"),
+      ev("applied", "lost", "2026-08-02T00:00:00.000Z"),
+      ev("lost", "applied", "2026-08-03T00:00:00.000Z"),
+      ev("applied", "won", "2026-08-04T00:00:00.000Z"),
+    ]);
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ startedAt: "2026-08-01T00:00:00.000Z", result: "won", resultAt: "2026-08-04T00:00:00.000Z" });
+  });
+
   it("applied→won→purchased→won: 訂正入力で購入状態のみリセット（当選実績は残る）", () => {
     const attempts = reconstructAttempts([
       ev("unknown", "applied", "2026-08-01T00:00:00.000Z"),

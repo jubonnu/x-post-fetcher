@@ -22,10 +22,10 @@ export function isLotteryStatus(value: string): value is LotteryStatus {
 
 /**
  * `unknown`からは任意の状態へ直接遷移可（過去分の一括記録を許容、10.2節）。
- * `won → purchased/skipped`のみ許可。`purchased → won`は訂正操作として許可する
- * （モバイル側で確認ダイアログを必須にする前提、バックエンドはホワイトリストのみ強制）。
+ * `won → purchased/skipped`のみ許可。`purchased → won`・`lost → applied`は訂正操作として
+ * 許可する（モバイル側で確認ダイアログを必須にする前提、バックエンドはホワイトリストのみ強制。
+ * 10.2節「元に戻せるか」の通り、落選を間違えて記録した場合に応募済みへ戻せるようにする）。
  * `skipped → planned`（見送りの取り消し）を許可する。
- * `lost → applied`は明示的に禁止（10.2節）。
  *
  * 決定事項（2026-08、統計の応募試行集計の設計時に検討）:
  * `skipped → won`（`purchased → won`と対称的な「購入見送りの訂正」）は**意図的に許可しない**。
@@ -43,7 +43,7 @@ const TRANSITIONS: Record<LotteryStatus, readonly LotteryStatus[]> = {
   planned: ["applied", "skipped"],
   applied: ["won", "lost"],
   won: ["purchased", "skipped"],
-  lost: [],
+  lost: ["applied"],
   purchased: ["won"],
   skipped: ["planned"],
 };
