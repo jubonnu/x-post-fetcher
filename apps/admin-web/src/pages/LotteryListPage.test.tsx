@@ -442,6 +442,23 @@ describe("LotteryListPage", () => {
     });
   });
 
+  describe("タブ・ページのURL保持（編集画面から戻っても消えない）", () => {
+    it("URLにtab・pageが入っていれば、再マウント後もそのタブ・ページで取得する", async () => {
+      const apiRequestSpy = vi
+        .spyOn(client, "apiRequest")
+        .mockResolvedValue({ items: [], total: 101 } satisfies LotteryListResponse);
+
+      renderPage(["/?tab=approved&page=1"]);
+
+      await waitFor(() =>
+        expect(apiRequestSpy).toHaveBeenLastCalledWith("/admin/lotteries?verificationStatus=approved&limit=20&offset=20")
+      );
+      expect(screen.getByRole("button", { name: "承認済み" })).toHaveClass("active");
+      expect(screen.getByText("2 / 6")).toBeInTheDocument();
+    });
+
+  });
+
   it("取得に失敗するとエラーメッセージを表示する", async () => {
     vi.spyOn(client, "apiRequest").mockRejectedValue(new client.ApiError("SERVICE_BUSY", "サーバーが混雑しています", 503));
 

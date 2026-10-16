@@ -16,6 +16,11 @@ const TABS: { key: Tab; label: string }[] = [
 
 const PAGE_SIZE = 20;
 
+const TAB_KEYS = TABS.map((t) => t.key);
+function isTab(value: string | null): value is Tab {
+  return value !== null && (TAB_KEYS as string[]).includes(value);
+}
+
 function displayTitle(item: LotteryRow): string {
   return item.productNameRaw?.trim() || item.normalizedProductName?.trim() || "商品名未確認";
 }
@@ -95,12 +100,13 @@ function dateInputToRangeEndIso(dateStr: string): string | null {
 
 export function LotteryListPage() {
   const { admin, logout } = useAuth();
-  const [tab, setTab] = useState<Tab>("needsReview");
-  const [page, setPage] = useState(0);
-  // X投稿日の絞り込みはURLのクエリパラメータで保持する（一覧→編集画面→一覧と遷移して戻っても
-  // 選択した日付が消えないようにするため。ローカルstateだとページ遷移でコンポーネントが
+  // タブ・ページ・X投稿日の絞り込みはURLのクエリパラメータで保持する（一覧→編集画面→一覧と遷移して戻っても
+  // 選択したタブ・ページ・日付が消えないようにするため。ローカルstateだとページ遷移でコンポーネントが
   // アンマウントされ消えてしまう）。
   const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const tab: Tab = isTab(tabParam) ? tabParam : "needsReview";
+  const page = Math.max(0, Number(searchParams.get("page") ?? "0") || 0);
   const publishedFrom = searchParams.get("publishedFrom") ?? "";
   const publishedTo = searchParams.get("publishedTo") ?? "";
   const search = searchParams.get("search") ?? "";
@@ -151,9 +157,23 @@ export function LotteryListPage() {
     void load();
   }, [load]);
 
+  function setPage(next: number) {
+    setSearchParams((prev) => {
+      const nextParams = new URLSearchParams(prev);
+      if (next > 0) nextParams.set("page", String(next));
+      else nextParams.delete("page");
+      return nextParams;
+    });
+  }
+
   function selectTab(next: Tab) {
-    setTab(next);
-    setPage(0);
+    setSearchParams((prev) => {
+      const nextParams = new URLSearchParams(prev);
+      if (next !== "needsReview") nextParams.set("tab", next);
+      else nextParams.delete("tab");
+      nextParams.delete("page");
+      return nextParams;
+    });
   }
 
   function handlePublishedFromChange(value: string) {
@@ -356,7 +376,7 @@ export function LotteryListPage() {
 
       {total > PAGE_SIZE ? (
         <div className="pagination-row">
-          <button type="button" className="secondary" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>
+          <button type="button" className="secondary" disabled={page === 0} onClick={() => setPage(Math.max(0, page - 1))}>
             前へ
           </button>
           <span className="muted">
@@ -366,7 +386,7 @@ export function LotteryListPage() {
             type="button"
             className="secondary"
             disabled={page + 1 >= pageCount}
-            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            onClick={() => setPage(Math.min(pageCount - 1, page + 1))}
           >
             次へ
           </button>
